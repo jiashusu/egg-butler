@@ -1,5 +1,5 @@
 import { createElement, showToast, showLoading, showEmpty } from '../utils/dom.js';
-import { formatDateTime, formatRelative, intervalText, formatDateCN } from '../utils/time.js';
+import { formatDate, formatDateTime, formatTime, intervalText, formatDateCN } from '../utils/time.js';
 import { getRecordsByType, deleteRecord } from '../db.js';
 import { getStats } from '../prediction.js';
 import { createTimelineChart, createFrequencyChart, createWeekChart } from '../charts.js';
@@ -21,6 +21,8 @@ const POOP_STATUS = {
 
 let currentType = null;
 let allRecords = [];
+let calendarMonth = null;
+let selectedDateKey = null;
 
 export async function render(container, type, allRecordsData) {
   currentType = type;
@@ -58,7 +60,7 @@ export async function render(container, type, allRecordsData) {
       </div>
       <div class="stat-item">
         <span class="stat-value">${stat.todayCount}</span>
-        <span class="stat-label">今日</span>
+        <span class="stat-label">本轮</span>
       </div>
       ${stat.totalToday > 0 ? `
         <div class="stat-item">
@@ -112,23 +114,43 @@ export async function render(container, type, allRecordsData) {
   const typedRecords = allRecords.filter(r => r.type === type)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
+  if (!calendarMonth) {
+    const latest = typedRecords[0]?.timestamp ? new Date(typedRecords[0].timestamp) : new Date();
+    calendarMonth = new Date(latest.getFullYear(), latest.getMonth(), 1);
+  }
+
+  page.appendChild(createCalendarSection(typedRecords, type));
+
+  const visibleRecords = selectedDateKey
+    ? typedRecords.filter(record => record.dateStr === selectedDateKey)
+    : typedRecords;
+
   const listSection = createElement('div', { className: 'record-list-section' }, [
-    createElement('h3', { className: 'list-title' }, '最近记录')
+    createElement('div', { className: 'list-head-row' }, [
+      createElement('h3', { className: 'list-title' }, selectedDateKey ? `${formatDateCN(new Date(`${selectedDateKey}T00:00:00`))}记录` : '最近记录'),
+      selectedDateKey ? createElement('button', {
+        className: 'calendar-clear-btn',
+        onclick: () => {
+          selectedDateKey = null;
+          rerenderHistory();
+        }
+      }, '看全部') : createElement('span', { className: 'list-count' }, `${typedRecords.length}条`)
+    ])
   ]);
 
-  if (typedRecords.length === 0) {
+  if (visibleRecords.length === 0) {
     const emptyMsg = createElement('p', { className: 'list-empty' }, '还没有记录，快去记录吧！');
     listSection.appendChild(emptyMsg);
   } else {
     const list = createElement('div', { className: 'record-list' });
-    typedRecords.slice(0, 50).forEach(r => {
+    visibleRecords.slice(0, 50).forEach(r => {
       const row = createRecordRow(r, type);
       list.appendChild(row);
     });
     listSection.appendChild(list);
 
-    if (typedRecords.length > 50) {
-      const more = createElement('p', { className: 'list-more' }, `还有 ${typedRecords.length - 50} 条记录`);
+    if (visibleRecords.length > 50) {
+      const more = createElement('p', { className: 'list-more' }, `还有 ${visibleRecords.length - 50} 条记录`);
       listSection.appendChild(more);
     }
   }
@@ -142,6 +164,96 @@ export async function render(container, type, allRecordsData) {
       createTimelineChart(canvas, typedRecords, type);
     }
   }, 50);
+}
+
+function createCalendarSection(typedRecords, type) {
+  const monthDate = calendarMonth || new Date();
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const todayKey = formatDate(new Date());
+  const monthTitle = `${year}年${month + 1}月`;
+  const daySummary = summarizeByDate(typedRecords, type);
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startOffset = firstDay.getDay();
+
+  const section = createElement('section', { className: 'history-calendar-section' }, [
+    createElement('div', { className: 'history-calendar-head' }, [
+      createElement('button', {
+        className: 'calendar-nav-btn',
+        onclick: () => {
+          calendarMonth = new Date(year, month - 1, 1);
+          rerenderHistory();
+        }
+      }, '‹'),
+      createElement('div', { className: 'history-calendar-title' }, [
+        createElement('strong', {}, monthTitle),
+        createElement('span', {}, selectedDateKey ? `正在看 ${formatDateCN(new Date(`${selectedDateKey}T00:00:00`))}` : '点日期查看当天日志')
+      ]),
+      createElement('button', {
+        className: 'calendar-nav-btn',
+        onclick: () => {
+          calendarMonth = new Date(year, month + 1, 1);
+          rerenderHistory();
+        }
+      }, '›')
+    ])
+  ]);
+
+  const week = createElement('div', { className: 'history-calendar-week' });
+  ['日', '一', '二', '三', '四', '五', '六'].forEach(label => {
+    week.appendChild(createElement('span', {}, label));
+  });
+  section.appendChild(week);
+
+  const grid = createElement('div', { className: 'history-calendar-grid' });
+  for (let i = 0; i < startOffset; i++) {
+    grid.appendChild(createElement('span', { className: 'calendar-day-cell empty' }));
+  }
+
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    const date = new Date(year, month, day);
+    const key = formatDate(date);
+    const summary = daySummary[key];
+    const cell = createElement('button', {
+      className: [
+        'calendar-day-cell',
+        summary ? 'has-records' : '',
+        key === selectedDateKey ? 'selected' : '',
+        key === todayKey ? 'today' : ''
+      ].filter(Boolean).join(' '),
+      onclick: () => {
+        selectedDateKey = key === selectedDateKey ? null : key;
+        rerenderHistory();
+      }
+    }, [
+      createElement('span', { className: 'calendar-day-num' }, String(day)),
+      createElement('span', { className: 'calendar-day-meta' }, summary ? formatCalendarMeta(summary, type) : '')
+    ]);
+    grid.appendChild(cell);
+  }
+
+  section.appendChild(grid);
+  section.appendChild(createElement('div', { className: 'history-calendar-foot' }, [
+    createElement('button', {
+      className: 'calendar-mini-btn',
+      onclick: () => {
+        const today = new Date();
+        calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        selectedDateKey = todayKey;
+        rerenderHistory();
+      }
+    }, '今天'),
+    createElement('button', {
+      className: 'calendar-mini-btn',
+      onclick: () => {
+        selectedDateKey = null;
+        rerenderHistory();
+      }
+    }, '全部日志')
+  ]));
+
+  return section;
 }
 
 function switchChart(tabKey, page, type) {
@@ -166,7 +278,7 @@ function createRecordRow(record, type) {
   const info = TYPE_INFO[type];
   const row = createElement('div', { className: 'record-row' });
 
-  const time = createElement('div', { className: 'record-time' }, formatDateTime(new Date(record.timestamp)));
+  const time = createElement('div', { className: 'record-time' }, selectedDateKey ? formatTime(new Date(record.timestamp)) : formatDateTime(new Date(record.timestamp)));
   let amount;
   if (record.amount != null) {
     amount = createElement('div', { className: 'record-amount' }, `${record.amount}${info.unit}`);
@@ -195,6 +307,29 @@ function createRecordRow(record, type) {
   row.appendChild(deleteBtn);
 
   return row;
+}
+
+function summarizeByDate(records, type) {
+  return records.reduce((map, record) => {
+    const key = record.dateStr;
+    if (!map[key]) map[key] = { count: 0, total: 0, abnormal: 0 };
+    map[key].count++;
+    if (record.amount) map[key].total += Number(record.amount) || 0;
+    if (type === 'poop' && record.value && record.value !== 'normal') map[key].abnormal++;
+    return map;
+  }, {});
+}
+
+function formatCalendarMeta(summary, type) {
+  if (type === 'drink') return `${Math.round(summary.total)}ml`;
+  if (type === 'eat') return `${Math.round(summary.total)}g`;
+  if (type === 'poop' && summary.abnormal > 0) return `${summary.count}次/${summary.abnormal}异`;
+  return `${summary.count}次`;
+}
+
+function rerenderHistory() {
+  const container = document.getElementById('app-content');
+  if (container && currentType) render(container, currentType, allRecords);
 }
 
 function createPoopStatusBar(breakdown) {

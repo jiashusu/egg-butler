@@ -1,8 +1,8 @@
-import { initDB, getAllRecords, addRecord, importRecords } from './db.js';
+import { initDB, getAllRecords, addRecord, importRecords, getSettings, importSettings } from './db.js';
 import { predictAll, getStats } from './prediction.js';
 import { showLoading, showToast, showModal, hideModal, $id, $q } from './utils/dom.js';
 import { toLocalISO } from './utils/time.js';
-import { downloadCloudBackup, getCloudBackupId, uploadCloudBackup } from './utils/cloudBackup.js';
+import { downloadCloudBackup, getCloudBackupId, setCloudSyncMeta, uploadCloudBackup } from './utils/cloudBackup.js';
 
 import './views/dashboard.js';
 import './views/record.js';
@@ -12,6 +12,7 @@ import './views/analytics.js';
 let records = [];
 let predictions = {};
 let stats = {};
+let settings = {};
 let currentRoute = 'dashboard';
 let initPromise = null;
 let cloudSyncTimer = null;
@@ -25,11 +26,14 @@ async function init() {
 
     await initDB();
     await refreshData();
+    await refreshSettings();
     await syncCloudRecords({ render: false, showSuccess: false });
     await refreshData();
+    await refreshSettings();
 
     window.navigateTo = navigateTo;
     window.onRecordSaved = onRecordSaved;
+    window.onSettingsSaved = onSettingsSaved;
     window.syncCloudNow = syncCloudRecords;
 
     setupRouter();
@@ -86,25 +90,33 @@ async function handleRoute(route) {
         navigateTo('analytics');
       }
     });
-    dashboard.render(container, predictions, stats, records);
+    dashboard.render(container, predictions, stats, records, settings);
   } else if (page === 'record') {
     const record = await import('./views/record.js');
-    record.render(container, params.get('type'), false);
+    record.render(container, params.get('type'), false, settings);
   } else if (page === 'history') {
     const history = await import('./views/history.js');
     history.render(container, params.get('type') || 'drink', records);
   } else if (page === 'analytics') {
     const analytics = await import('./views/analytics.js');
-    analytics.render(container, records, stats);
+    analytics.render(container, records, stats, settings);
   }
 }
 
 async function onRecordSaved() {
   await refreshData();
+  await refreshSettings();
+  scheduleCloudUpload();
 
   const route = location.hash.replace('#', '') || 'dashboard';
   await handleRoute(route);
+}
+
+async function onSettingsSaved() {
+  await refreshSettings();
   scheduleCloudUpload();
+  const route = location.hash.replace('#', '') || 'dashboard';
+  await handleRoute(route);
 }
 
 async function refreshData() {
@@ -116,8 +128,13 @@ async function refreshData() {
   }
 }
 
+async function refreshSettings() {
+  settings = await getSettings();
+}
+
 function scheduleCloudUpload() {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  setCloudSyncMeta({ status: 'pending', message: '本机有新数据，等待上传...' });
   cloudSyncTimer = setTimeout(() => {
     syncCloudRecords({ render: false, showSuccess: false }).catch(() => {});
   }, 1200);
@@ -127,28 +144,47 @@ async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
   if (cloudSyncInFlight) return null;
 
   cloudSyncInFlight = true;
+  setCloudSyncMeta({ status: 'syncing', message: '正在同步...' });
   try {
     const backupId = getCloudBackupId();
     const remote = await downloadCloudBackup(backupId);
 
     if (remote.exists) {
       const summary = await importRecords(remote.records);
+      if (remote.settings) {
+        await importSettings(remote.settings);
+        await refreshSettings();
+      }
       if (summary.imported > 0) {
         await refreshData();
       }
     }
 
-    await uploadCloudBackup(records, backupId);
+    const uploaded = await uploadCloudBackup(records, backupId, settings);
+    setCloudSyncMeta({
+      status: 'synced',
+      lastSyncAt: new Date().toISOString(),
+      lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
+      recordCount: records.length,
+      message: '本机和云端已同步'
+    });
 
     if (render) {
       await refreshData();
       const route = location.hash.replace('#', '') || 'dashboard';
       await handleRoute(route);
+    } else if ((location.hash.replace('#', '') || 'dashboard') === 'dashboard') {
+      await handleRoute('dashboard');
     }
     if (showSuccess) showToast('云端同步完成');
 
     return { ok: true, backupId };
   } catch (error) {
+    setCloudSyncMeta({
+      status: 'error',
+      lastSyncAt: new Date().toISOString(),
+      message: error?.message || '同步失败'
+    });
     if (showSuccess) showToast(error?.message || '云端同步失败');
     return { ok: false, error };
   } finally {
@@ -162,7 +198,7 @@ function startAutoRefresh() {
     if (route === 'dashboard') {
       predictions = predictAll(records);
       const dashboard = await import('./views/dashboard.js');
-      dashboard.render($id('app-content'), predictions, stats, records);
+      dashboard.render($id('app-content'), predictions, stats, records, settings);
     }
   }, 60000);
 }
@@ -170,7 +206,11 @@ function startAutoRefresh() {
 function showQuickRecordModal(preSelectedType) {
   const typeIcons = { drink: '💧', eat: '🍚', poop: '💩', pee: '💦' };
   const typeLabels = { drink: '喝水', eat: '吃饭', poop: '排便', pee: '尿尿' };
-  const defaultAmounts = { drink: 607, eat: 465 };
+  const petName = settings.petName || '宠物';
+  const defaultAmounts = {
+    drink: settings.drinkDefaultAmount || settings.drinkGoal || 607,
+    eat: settings.mealDefaultAmount || settings.mealDefault || 465
+  };
   const poopOptions = [
     { key: 'normal', label: '正常' },
     { key: 'small', label: '少量' },
@@ -187,7 +227,7 @@ function showQuickRecordModal(preSelectedType) {
 
   showModal(`
     <div class="quick-record-modal">
-      <h3 class="settings-title">✨ 快速记录</h3>
+      <h3 class="settings-title">✨ 快速记录 ${petName}</h3>
       <div class="quick-type-grid">
         ${typeBtns}
       </div>

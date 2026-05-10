@@ -2,6 +2,24 @@ const CACHE_KEY = 'eggButlerCache';
 
 let db;
 
+const DEFAULT_SETTINGS = {
+  key: 'preferences',
+  petName: '蛋蛋',
+  dogName: '蛋蛋',
+  species: '狗狗',
+  breed: '边牧',
+  age: 2,
+  photoUrl: '/assets/dandan-portrait.jpeg',
+  drinkGoal: 607,
+  mealDefault: 465,
+  drinkDefaultAmount: 607,
+  mealDefaultAmount: 465,
+  drinkGoalCount: 3,
+  mealGoalCount: 1,
+  recordMode: 'simple',
+  createdAt: new Date().toISOString()
+};
+
 export async function initDB() {
   db = new Dexie('EggButlerDB');
   db.version(1).stores({
@@ -10,18 +28,11 @@ export async function initDB() {
   });
   await db.open();
 
-  const defaultSettings = {
-    key: 'preferences',
-    dogName: '蛋蛋',
-    breed: '边牧',
-    age: 2,
-    recordMode: 'simple',
-    createdAt: new Date().toISOString()
-  };
-
   const existing = await db.settings.get('preferences');
   if (!existing) {
-    await db.settings.put(defaultSettings);
+    await db.settings.put(DEFAULT_SETTINGS);
+  } else if (!existing.petName) {
+    await saveSettings({ ...DEFAULT_SETTINGS, ...existing, petName: existing.dogName || DEFAULT_SETTINGS.petName });
   }
 
   return db;
@@ -90,6 +101,56 @@ export async function deleteRecord(id) {
   invalidateCache();
 }
 
+export async function updateRecord(id, updates = {}) {
+  const current = await db.records.get(id);
+  if (!current) throw new Error('记录不存在');
+
+  const timestamp = updates.timestamp || current.timestamp;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) throw new Error('时间无效');
+
+  const next = {
+    ...current,
+    ...updates,
+    timestamp: date.toISOString(),
+    dateStr: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  };
+
+  if (next.amount === '' || next.amount === undefined || next.amount === null) delete next.amount;
+  if (next.value === '' || next.value === undefined || next.value === null) delete next.value;
+
+  await db.records.put(next);
+  invalidateCache();
+  return next;
+}
+
+export async function addRecords(records = []) {
+  const cleanRecords = [];
+  for (const item of records) {
+    if (!item || !item.type || !item.timestamp) continue;
+    const date = new Date(item.timestamp);
+    if (Number.isNaN(date.getTime())) continue;
+    const record = {
+      type: item.type,
+      timestamp: date.toISOString(),
+      dateStr: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    };
+    if (item.amount !== undefined && item.amount !== null && item.amount !== '') {
+      const amount = Number(item.amount);
+      if (Number.isFinite(amount)) record.amount = amount;
+    }
+    if (item.value !== undefined && item.value !== null && item.value !== '') record.value = item.value;
+    cleanRecords.push(record);
+  }
+
+  if (cleanRecords.length > 0) {
+    await db.records.bulkAdd(cleanRecords);
+    invalidateCache();
+  }
+
+  return cleanRecords.length;
+}
+
 export async function importRecords(incomingRecords = []) {
   const existing = await db.records.toArray();
   const seen = new Set(existing.map(recordKey));
@@ -130,11 +191,19 @@ export async function importRecords(incomingRecords = []) {
 }
 
 export async function getSettings() {
-  return db.settings.get('preferences');
+  const settings = await db.settings.get('preferences');
+  return normalizeSettings(settings);
 }
 
 export async function saveSettings(settings) {
-  await db.settings.put({ ...settings, key: 'preferences' });
+  const normalized = normalizeSettings(settings);
+  await db.settings.put({ ...normalized, key: 'preferences', updatedAt: new Date().toISOString() });
+  return normalized;
+}
+
+export async function importSettings(settings) {
+  if (!settings || typeof settings !== 'object') return getSettings();
+  return saveSettings({ ...(await getSettings()), ...settings });
 }
 
 export async function getRecordCount() {
@@ -179,4 +248,36 @@ function recordKey(record) {
     record.amount ?? '',
     record.value ?? ''
   ].join('|');
+}
+
+function normalizeSettings(settings = {}) {
+  const petName = settings.petName || settings.dogName || DEFAULT_SETTINGS.petName;
+  const drinkDefaultAmount = toPositiveNumber(settings.drinkDefaultAmount ?? settings.drinkGoal, DEFAULT_SETTINGS.drinkDefaultAmount);
+  const mealDefaultAmount = toPositiveNumber(settings.mealDefaultAmount ?? settings.mealDefault, DEFAULT_SETTINGS.mealDefaultAmount);
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    petName,
+    dogName: petName,
+    species: settings.species || DEFAULT_SETTINGS.species,
+    breed: settings.breed || DEFAULT_SETTINGS.breed,
+    age: settings.age ?? DEFAULT_SETTINGS.age,
+    photoUrl: settings.photoUrl || DEFAULT_SETTINGS.photoUrl,
+    drinkGoal: drinkDefaultAmount,
+    mealDefault: mealDefaultAmount,
+    drinkDefaultAmount,
+    mealDefaultAmount,
+    drinkGoalCount: toPositiveInteger(settings.drinkGoalCount, DEFAULT_SETTINGS.drinkGoalCount),
+    mealGoalCount: toPositiveInteger(settings.mealGoalCount, DEFAULT_SETTINGS.mealGoalCount)
+  };
+}
+
+function toPositiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function toPositiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }

@@ -1,4 +1,5 @@
 const CLOUD_BACKUP_ID_KEY = 'eggButlerCloudBackupId';
+const CLOUD_SYNC_META_KEY = 'eggButlerCloudSyncMeta';
 
 export function getCloudBackupId() {
   let backupId = localStorage.getItem(CLOUD_BACKUP_ID_KEY);
@@ -23,11 +24,11 @@ export function createCloudBackupId() {
   return `egg_${toBase64Url(random)}`;
 }
 
-export async function uploadCloudBackup(records, backupId = getCloudBackupId()) {
+export async function uploadCloudBackup(records, backupId = getCloudBackupId(), settings = null) {
   const response = await fetch('/api/backup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ backupId, records, recordCount: records.length })
+    body: JSON.stringify({ backupId, records, settings, recordCount: records.length })
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -50,6 +51,7 @@ export async function downloadCloudBackup(backupId = getCloudBackupId()) {
   return {
     exists: true,
     records: Array.isArray(result.records) ? result.records : [],
+    settings: result.settings || null,
     recordCount: result.recordCount || 0,
     uploadedAt: result.uploadedAt || null
   };
@@ -57,6 +59,27 @@ export async function downloadCloudBackup(backupId = getCloudBackupId()) {
 
 export function isValidCloudBackupId(value) {
   return typeof value === 'string' && /^egg_[A-Za-z0-9_-]{32}$/.test(value);
+}
+
+export function getCloudSyncMeta() {
+  try {
+    const meta = JSON.parse(localStorage.getItem(CLOUD_SYNC_META_KEY) || '{}');
+    return {
+      status: meta.status || 'idle',
+      lastSyncAt: meta.lastSyncAt || null,
+      lastUploadedAt: meta.lastUploadedAt || null,
+      recordCount: Number(meta.recordCount) || 0,
+      message: meta.message || ''
+    };
+  } catch (error) {
+    return { status: 'idle', lastSyncAt: null, lastUploadedAt: null, recordCount: 0, message: '' };
+  }
+}
+
+export function setCloudSyncMeta(meta = {}) {
+  const next = { ...getCloudSyncMeta(), ...meta };
+  localStorage.setItem(CLOUD_SYNC_META_KEY, JSON.stringify(next));
+  return next;
 }
 
 function toBase64Url(bytes) {

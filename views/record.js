@@ -19,10 +19,12 @@ const POOP_OPTIONS = [
 
 let selectedType = null;
 let isQuickMode = false;
+let currentSettings = {};
 
-export function render(container, preSelectedType = null, quickMode = false) {
+export function render(container, preSelectedType = null, quickMode = false, settings = {}) {
   selectedType = preSelectedType;
   isQuickMode = quickMode;
+  currentSettings = settings || {};
   container.innerHTML = '';
 
   const page = createElement('div', { className: 'record-page' });
@@ -38,7 +40,7 @@ export function render(container, preSelectedType = null, quickMode = false) {
         if (typeof window.navigateTo === 'function') window.navigateTo('dashboard');
       }
     }, '← 返回'),
-    createElement('h2', { className: 'page-title' }, isQuickMode ? '快速记录' : '记录蛋蛋的活动')
+    createElement('h2', { className: 'page-title' }, isQuickMode ? '快速记录' : `记录${settings.petName || '宠物'}的活动`)
   ]);
   page.appendChild(header);
 
@@ -129,10 +131,13 @@ function selectType(type) {
   const valueGroup = document.getElementById('value-group');
 
   if (typeInfo && typeInfo.hasAmount) {
+    const defaultAmount = type === 'drink'
+      ? currentSettings.drinkDefaultAmount || currentSettings.drinkGoal || typeInfo.defaultAmount
+      : currentSettings.mealDefaultAmount || currentSettings.mealDefault || typeInfo.defaultAmount;
     amountGroup.innerHTML = `
       <p class="form-label">${typeInfo.label}量 (${typeInfo.unit})</p>
       <input type="number" class="form-input" id="record-amount"
-        placeholder="请输入${typeInfo.label}量" min="1" step="1" value="${typeInfo.defaultAmount}">
+        placeholder="请输入${typeInfo.label}量" min="1" step="1" value="${defaultAmount}">
     `;
     amountGroup.style.display = 'block';
   } else {

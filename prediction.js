@@ -1,4 +1,5 @@
-import { minuteOfDay, getDateStr } from './utils/time.js';
+import { minuteOfDay } from './utils/time.js';
+import { getActivityDayKeyForRecord, getActivityDayRecords, getCurrentActivityDayKey } from './utils/activityDay.js';
 
 const TYPE_LABELS = {
   drink: { name: '喝水', unit: 'ml', icon: '💧', default: 240 },
@@ -14,6 +15,20 @@ const WEIGHTS = {
   pee: { timeOfDay: 0.20, interval: 0.35, recency: 0.45 }
 };
 
+const MIN_INTERVAL_FACTOR = {
+  drink: 0.35,
+  eat: 0.45,
+  poop: 0.55,
+  pee: 0.55
+};
+
+const MIN_INTERVAL_MINUTES = {
+  drink: 90,
+  eat: 360,
+  poop: 180,
+  pee: 180
+};
+
 const POOP_STATUS = {
   normal: { label: '正常', healthScore: 1 },
   small: { label: '少量', healthScore: 0.65 },
@@ -24,6 +39,10 @@ const POOP_STATUS = {
 
 function gaussianWeight(offset, sigma) {
   return Math.exp(-0.5 * (offset / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI));
+}
+
+function normalizedGaussianScore(offset, sigma) {
+  return Math.exp(-0.5 * (offset / sigma) ** 2);
 }
 
 function buildTimeOfDayDistribution(records) {
@@ -123,7 +142,9 @@ function estimateConfidence(intervals, totalRecords) {
 }
 
 export function predictNext(type, records) {
-  const typedRecords = records.filter(r => r.type === type);
+  const typedRecords = records
+    .filter(r => r.type === type)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   const totalRecords = typedRecords.length;
 
   if (totalRecords === 0) {
@@ -137,8 +158,8 @@ export function predictNext(type, records) {
     };
   }
 
-  const today = getDateStr(new Date());
-  const todayCount = typedRecords.filter(r => r.dateStr === today).length;
+  const today = getCurrentActivityDayKey(records);
+  const todayCount = typedRecords.filter(record => getActivityDayKeyForRecord(record, records) === today).length;
 
   const lastRecord = typedRecords[typedRecords.length - 1];
   const lastTime = new Date(lastRecord.timestamp);
@@ -154,7 +175,7 @@ export function predictNext(type, records) {
 
     return {
       type,
-      nextTime: next,
+      nextTime: overdue ? now : next,
       confidence: status && status !== 'normal' ? 0.12 : 0.2,
       message: status && status !== 'normal'
         ? `最近${POOP_STATUS[status].label}，注意观察`
@@ -185,33 +206,45 @@ export function predictNext(type, records) {
   const intervalBasedTime = new Date(lastTime.getTime() + adjustedInterval * 60000);
 
   const tod = buildTimeOfDayDistribution(typedRecords);
+  const todMax = Math.max(...tod, 0.001);
 
-  const searchStart = new Date(Math.min(now, lastTime.getTime()));
+  const minWait = Math.max(
+    MIN_INTERVAL_MINUTES[type] || 60,
+    adjustedInterval * (MIN_INTERVAL_FACTOR[type] || 0.45)
+  );
+  const earliestReasonable = new Date(lastTime.getTime() + minWait * 60000);
+  const searchStart = new Date(Math.max(now.getTime(), earliestReasonable.getTime()));
   const searchEnd = new Date(lastTime.getTime() + 2 * adjustedInterval * 60000);
 
   let bestSlot = null;
   let bestScore = -Infinity;
   const granularity = 15;
 
-  const cursor = new Date(searchStart);
-  while (cursor <= searchEnd) {
-    const mod = cursor.getHours() * 60 + cursor.getMinutes();
-    const bucketIndex = Math.round(mod / 15) % 96;
+  if (now > intervalBasedTime) {
+    bestSlot = new Date(now);
+  } else if (searchStart <= searchEnd) {
+    const cursor = new Date(searchStart);
+    while (cursor <= searchEnd) {
+      const mod = cursor.getHours() * 60 + cursor.getMinutes();
+      const bucketIndex = Math.round(mod / 15) % 96;
 
-    const todScore = tod[bucketIndex] || 0;
+      const todScore = (tod[bucketIndex] || 0) / todMax;
 
-    const diffFromInterval = Math.abs(cursor - intervalBasedTime) / 60000;
-    const intervalSigma = Math.max(30, adjustedInterval * 0.25);
-    const intervalScore = gaussianWeight(diffFromInterval, intervalSigma);
+      const diffFromInterval = Math.abs(cursor - intervalBasedTime) / 60000;
+      const intervalSigma = Math.max(45, adjustedInterval * 0.25);
+      const intervalScore = normalizedGaussianScore(diffFromInterval, intervalSigma);
 
-    const w = WEIGHTS[type];
-    const score = w.timeOfDay * todScore + w.interval * intervalScore + w.recency * intervalScore;
+      const w = WEIGHTS[type];
+      const score = w.timeOfDay * todScore + (w.interval + w.recency) * intervalScore;
 
-    if (score > bestScore) {
-      bestScore = score;
-      bestSlot = new Date(cursor);
+      if (score > bestScore) {
+        bestScore = score;
+        bestSlot = new Date(cursor);
+      }
+      cursor.setTime(cursor.getTime() + granularity * 60000);
     }
-    cursor.setTime(cursor.getTime() + granularity * 60000);
+  } else {
+    bestSlot = intervalBasedTime;
   }
 
   let confidence = parseFloat(estimateConfidence(filteredIntervals, totalRecords).toFixed(2));
@@ -265,6 +298,8 @@ export function predictAll(records) {
 
 export function getStats(type, records) {
   const typedRecords = records.filter(r => r.type === type);
+  const today = getCurrentActivityDayKey(records);
+  const todayRecords = getActivityDayRecords(typedRecords, today, records);
 
   if (typedRecords.length === 0) {
     return {
@@ -272,12 +307,15 @@ export function getStats(type, records) {
       totalRecords: 0,
       avgInterval: null,
       todayCount: 0,
-      totalToday: 0
+      totalToday: 0,
+      activityDayKey: today,
+      todayRecords: []
     };
   }
 
-  const today = getDateStr(new Date());
-  const todayRecords = typedRecords.filter(r => r.dateStr === today);
+  const lastRecord = typedRecords
+    .slice()
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] || null;
 
   let totalToday = 0;
   if (type === 'drink' || type === 'eat') {
@@ -297,6 +335,8 @@ export function getStats(type, records) {
     todayCount: todayRecords.length,
     totalToday,
     todayRecords,
+    activityDayKey: today,
+    lastTimestamp: lastRecord?.timestamp || null,
     ...poopStats
   };
 }

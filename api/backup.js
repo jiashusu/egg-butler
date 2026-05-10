@@ -1,7 +1,7 @@
 import { list, put } from '@vercel/blob';
 
 const BACKUP_PREFIX = 'egg-butler-backups';
-const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024;
 
 export default async function handler(req, res) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
@@ -48,13 +48,14 @@ async function getBackup(req, res) {
   const body = await response.json();
   return sendJSON(res, 200, {
     records: Array.isArray(body.records) ? body.records : [],
+    settings: body.settings || null,
     recordCount: body.recordCount || 0,
     uploadedAt: body.uploadedAt || null
   });
 }
 
 async function saveBackup(req, res) {
-  const { backupId, records, recordCount } = req.body || {};
+  const { backupId, records, settings, recordCount } = req.body || {};
   if (!isValidBackupId(backupId)) {
     return sendJSON(res, 400, { error: '同步码无效' });
   }
@@ -66,7 +67,8 @@ async function saveBackup(req, res) {
     version: 1,
     uploadedAt: new Date().toISOString(),
     recordCount: Number(recordCount) || 0,
-    records
+    records,
+    settings: settings && typeof settings === 'object' ? settings : null
   };
   const serialized = JSON.stringify(body);
   if (new TextEncoder().encode(serialized).length > MAX_PAYLOAD_BYTES) {

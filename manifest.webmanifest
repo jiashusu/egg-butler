@@ -1,7 +1,7 @@
 {
-  "name": "蛋蛋管家",
-  "short_name": "蛋蛋管家",
-  "description": "智能预测蛋蛋的喝水、吃饭、排便和尿尿时间",
+  "name": "宠物管家",
+  "short_name": "宠物管家",
+  "description": "记录并预测宠物的喝水、吃饭、排便和尿尿时间",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F5F7FA",
