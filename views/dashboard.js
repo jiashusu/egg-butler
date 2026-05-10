@@ -369,11 +369,12 @@ async function showSettingsModal() {
     if (!confirm('确定清空所有数据？此操作不可撤销！')) return;
 
     await clearAllData();
-    hideModal();
-    showToast('已清空所有数据');
+    let syncResult = null;
     if (typeof window.onRecordSaved === 'function') {
-      await window.onRecordSaved();
+      syncResult = await window.onRecordSaved({ syncNow: true });
     }
+    hideModal();
+    showToast(syncResult?.ok === false ? '本机已清空，云端同步失败' : '已清空所有数据并同步');
   };
 
   window._savePetProfile = async () => {
@@ -449,16 +450,21 @@ async function showSettingsModal() {
     }
 
     await updateRecord(id, { type, timestamp: new Date(timeValue).toISOString(), amount, value });
-    showToast('记录已更新');
     hideModal();
-    if (typeof window.onRecordSaved === 'function') await window.onRecordSaved();
+    const syncResult = typeof window.onRecordSaved === 'function'
+      ? await window.onRecordSaved({ syncNow: true })
+      : null;
+    showToast(syncResult?.ok === false ? '本机已更新，云端同步失败' : '记录已更新并同步');
   };
 
   window._deleteManagedRecord = async (id) => {
     if (!confirm('删除这条记录？')) return;
     await deleteRecord(id);
-    showToast('记录已删除');
-    if (typeof window.onRecordSaved === 'function') await window.onRecordSaved();
+    const syncResult = typeof window.onRecordSaved === 'function'
+      ? await window.onRecordSaved({ syncNow: true })
+      : null;
+    showToast(syncResult?.ok === false ? '本机已删除，云端同步失败' : '记录已删除并同步');
+    await window._showRecordManager();
   };
 
   window._showBatchAdd = () => {

@@ -1,4 +1,6 @@
 const CACHE_KEY = 'eggButlerCache';
+const DELETED_RECORD_KEYS_KEY = 'eggButlerDeletedRecordKeys';
+const MAX_DELETED_RECORD_KEYS = 3000;
 
 let db;
 
@@ -97,6 +99,8 @@ export async function getTodayRecords() {
 }
 
 export async function deleteRecord(id) {
+  const record = await db.records.get(id);
+  if (record) rememberDeletedRecordKeys([recordKey(record)]);
   await db.records.delete(id);
   invalidateCache();
 }
@@ -118,6 +122,10 @@ export async function updateRecord(id, updates = {}) {
 
   if (next.amount === '' || next.amount === undefined || next.amount === null) delete next.amount;
   if (next.value === '' || next.value === undefined || next.value === null) delete next.value;
+
+  const currentKey = recordKey(current);
+  const nextKey = recordKey(next);
+  if (currentKey !== nextKey) rememberDeletedRecordKeys([currentKey]);
 
   await db.records.put(next);
   invalidateCache();
@@ -174,6 +182,7 @@ export async function importRecords(incomingRecords = []) {
     if (item.value !== undefined && item.value !== null) record.value = item.value;
 
     const key = recordKey(record);
+    if (isDeletedRecordKey(key)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     recordsToAdd.push(record);
@@ -211,8 +220,39 @@ export async function getRecordCount() {
 }
 
 export async function clearAllData() {
+  const records = await db.records.toArray();
+  rememberDeletedRecordKeys(records.map(recordKey));
   await db.records.clear();
   invalidateCache();
+}
+
+export function getDeletedRecordKeys() {
+  return loadDeletedRecordKeys();
+}
+
+export async function applyDeletedRecordKeys(keys = []) {
+  const cleanKeys = normalizeDeletedRecordKeys(keys);
+  if (cleanKeys.length === 0) return { imported: 0, deleted: 0 };
+
+  const beforeCount = loadDeletedRecordKeys().length;
+  rememberDeletedRecordKeys(cleanKeys);
+  const afterCount = loadDeletedRecordKeys().length;
+
+  const deletedKeySet = new Set(cleanKeys);
+  const records = await db.records.toArray();
+  const idsToDelete = records
+    .filter(record => deletedKeySet.has(recordKey(record)))
+    .map(record => record.id);
+
+  if (idsToDelete.length > 0) {
+    await db.records.bulkDelete(idsToDelete);
+    invalidateCache();
+  }
+
+  return {
+    imported: Math.max(0, afterCount - beforeCount),
+    deleted: idsToDelete.length
+  };
 }
 
 function loadCache() {
@@ -239,6 +279,43 @@ function invalidateCache() {
   try {
     localStorage.removeItem(CACHE_KEY);
   } catch (e) {}
+}
+
+function loadDeletedRecordKeys() {
+  try {
+    const keys = JSON.parse(localStorage.getItem(DELETED_RECORD_KEYS_KEY) || '[]');
+    return normalizeDeletedRecordKeys(keys);
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveDeletedRecordKeys(keys) {
+  try {
+    localStorage.setItem(DELETED_RECORD_KEYS_KEY, JSON.stringify(keys));
+  } catch (e) {}
+}
+
+function rememberDeletedRecordKeys(keys) {
+  const merged = new Set(loadDeletedRecordKeys());
+  for (const key of normalizeDeletedRecordKeys(keys)) {
+    merged.add(key);
+  }
+
+  const next = Array.from(merged).slice(-MAX_DELETED_RECORD_KEYS);
+  saveDeletedRecordKeys(next);
+  return next;
+}
+
+function isDeletedRecordKey(key) {
+  return loadDeletedRecordKeys().includes(key);
+}
+
+function normalizeDeletedRecordKeys(keys) {
+  if (!Array.isArray(keys)) return [];
+  return keys
+    .filter(key => typeof key === 'string' && key.includes('|'))
+    .slice(-MAX_DELETED_RECORD_KEYS);
 }
 
 function recordKey(record) {

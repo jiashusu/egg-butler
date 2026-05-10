@@ -1,4 +1,13 @@
-import { initDB, getAllRecords, addRecord, importRecords, getSettings, importSettings } from './db.js';
+import {
+  initDB,
+  getAllRecords,
+  addRecord,
+  importRecords,
+  getSettings,
+  importSettings,
+  getDeletedRecordKeys,
+  applyDeletedRecordKeys
+} from './db.js';
 import { predictAll, getStats } from './prediction.js';
 import { showLoading, showToast, showModal, hideModal, $id, $q } from './utils/dom.js';
 import { toLocalISO } from './utils/time.js';
@@ -17,6 +26,7 @@ let currentRoute = 'dashboard';
 let initPromise = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
+let cloudSyncPromise = null;
 
 async function init() {
   if (initPromise) return initPromise;
@@ -103,13 +113,20 @@ async function handleRoute(route) {
   }
 }
 
-async function onRecordSaved() {
+async function onRecordSaved(options = {}) {
+  const { syncNow = false } = options || {};
   await refreshData();
   await refreshSettings();
-  scheduleCloudUpload();
+  let syncResult = null;
+  if (syncNow) {
+    syncResult = await pushLocalCloudSnapshot({ render: false, showSuccess: false });
+  } else {
+    scheduleCloudUpload();
+  }
 
   const route = location.hash.replace('#', '') || 'dashboard';
   await handleRoute(route);
+  return syncResult;
 }
 
 async function onSettingsSaved() {
@@ -136,31 +153,31 @@ function scheduleCloudUpload() {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   setCloudSyncMeta({ status: 'pending', message: '本机有新数据，等待上传...' });
   cloudSyncTimer = setTimeout(() => {
-    syncCloudRecords({ render: false, showSuccess: false }).catch(() => {});
+    pushLocalCloudSnapshot({ render: false, showSuccess: false }).catch(() => {});
   }, 1200);
 }
 
 async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
   if (cloudSyncInFlight) return null;
 
-  cloudSyncInFlight = true;
-  setCloudSyncMeta({ status: 'syncing', message: '正在同步...' });
-  try {
+  return runCloudTask(async () => {
+    setCloudSyncMeta({ status: 'syncing', message: '正在同步...' });
     const backupId = getCloudBackupId();
     const remote = await downloadCloudBackup(backupId);
 
     if (remote.exists) {
+      const deleteSummary = await applyDeletedRecordKeys(remote.deletedRecordKeys || []);
       const summary = await importRecords(remote.records);
       if (remote.settings) {
         await importSettings(remote.settings);
         await refreshSettings();
       }
-      if (summary.imported > 0) {
+      if (summary.imported > 0 || deleteSummary.deleted > 0) {
         await refreshData();
       }
     }
 
-    const uploaded = await uploadCloudBackup(records, backupId, settings);
+    const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
     setCloudSyncMeta({
       status: 'synced',
       lastSyncAt: new Date().toISOString(),
@@ -179,17 +196,62 @@ async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
     if (showSuccess) showToast('云端同步完成');
 
     return { ok: true, backupId };
-  } catch (error) {
+  }, { showSuccess });
+}
+
+async function pushLocalCloudSnapshot({ render = true, showSuccess = true } = {}) {
+  return runCloudTask(async () => {
+    setCloudSyncMeta({ status: 'syncing', message: '正在上传本机数据...' });
+    await refreshData();
+    await refreshSettings();
+
+    const backupId = getCloudBackupId();
+    const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
     setCloudSyncMeta({
-      status: 'error',
+      status: 'synced',
       lastSyncAt: new Date().toISOString(),
-      message: error?.message || '同步失败'
+      lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
+      recordCount: records.length,
+      message: '本机和云端已同步'
     });
-    if (showSuccess) showToast(error?.message || '云端同步失败');
-    return { ok: false, error };
-  } finally {
-    cloudSyncInFlight = false;
+
+    if (render) {
+      const route = location.hash.replace('#', '') || 'dashboard';
+      await handleRoute(route);
+    } else if ((location.hash.replace('#', '') || 'dashboard') === 'dashboard') {
+      await handleRoute('dashboard');
+    }
+    if (showSuccess) showToast('云端同步完成');
+
+    return { ok: true, backupId };
+  }, { showSuccess, waitForCurrent: true });
+}
+
+async function runCloudTask(task, { showSuccess = true, waitForCurrent = false } = {}) {
+  if (cloudSyncPromise) {
+    if (!waitForCurrent) return null;
+    await cloudSyncPromise.catch(() => {});
   }
+
+  cloudSyncInFlight = true;
+  cloudSyncPromise = (async () => {
+    try {
+      return await task();
+    } catch (error) {
+      setCloudSyncMeta({
+        status: 'error',
+        lastSyncAt: new Date().toISOString(),
+        message: error?.message || '同步失败'
+      });
+      if (showSuccess) showToast(error?.message || '云端同步失败');
+      return { ok: false, error };
+    } finally {
+      cloudSyncInFlight = false;
+      cloudSyncPromise = null;
+    }
+  })();
+
+  return cloudSyncPromise;
 }
 
 function startAutoRefresh() {

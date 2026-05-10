@@ -48,6 +48,7 @@ async function getBackup(req, res) {
   const body = await response.json();
   return sendJSON(res, 200, {
     records: Array.isArray(body.records) ? body.records : [],
+    deletedRecordKeys: Array.isArray(body.deletedRecordKeys) ? body.deletedRecordKeys : [],
     settings: body.settings || null,
     recordCount: body.recordCount || 0,
     uploadedAt: body.uploadedAt || null
@@ -55,7 +56,7 @@ async function getBackup(req, res) {
 }
 
 async function saveBackup(req, res) {
-  const { backupId, records, settings, recordCount } = req.body || {};
+  const { backupId, records, settings, deletedRecordKeys, recordCount } = req.body || {};
   if (!isValidBackupId(backupId)) {
     return sendJSON(res, 400, { error: '同步码无效' });
   }
@@ -64,10 +65,11 @@ async function saveBackup(req, res) {
   }
 
   const body = {
-    version: 1,
+    version: 2,
     uploadedAt: new Date().toISOString(),
     recordCount: Number(recordCount) || 0,
     records,
+    deletedRecordKeys: normalizeDeletedRecordKeys(deletedRecordKeys),
     settings: settings && typeof settings === 'object' ? settings : null
   };
   const serialized = JSON.stringify(body);
@@ -97,4 +99,11 @@ function sendJSON(res, status, body) {
 
 function isValidBackupId(value) {
   return typeof value === 'string' && /^egg_[A-Za-z0-9_-]{32}$/.test(value);
+}
+
+function normalizeDeletedRecordKeys(keys) {
+  if (!Array.isArray(keys)) return [];
+  return keys
+    .filter(key => typeof key === 'string' && key.includes('|'))
+    .slice(-3000);
 }

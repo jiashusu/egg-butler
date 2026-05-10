@@ -294,10 +294,10 @@ function createRecordRow(record, type) {
     onclick: async () => {
       if (confirm('确定删除这条记录？')) {
         await deleteRecord(record.id);
-        showToast('已删除');
-        if (typeof window.onRecordSaved === 'function') {
-          window.onRecordSaved();
-        }
+        const syncResult = typeof window.onRecordSaved === 'function'
+          ? await window.onRecordSaved({ syncNow: true })
+          : null;
+        showToast(syncResult?.ok === false ? '本机已删除，云端同步失败' : '已删除并同步');
       }
     }
   }, '✕');

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'egg-butler-v13';
+const CACHE_NAME = 'egg-butler-v14';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
