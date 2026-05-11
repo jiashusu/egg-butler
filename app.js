@@ -166,23 +166,16 @@ async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
     const remote = await downloadCloudBackup(backupId);
 
     if (remote.exists) {
-      const deleteSummary = await applyDeletedRecordKeys(remote.deletedRecordKeys || []);
-      const summary = await importRecords(remote.records);
-      if (remote.settings) {
-        await importSettings(remote.settings);
-        await refreshSettings();
-      }
-      if (summary.imported > 0 || deleteSummary.deleted > 0) {
-        await refreshData();
-      }
+      await applyRemoteBackup(remote);
     }
 
     const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
+    await applyRemoteBackup(uploaded);
     setCloudSyncMeta({
       status: 'synced',
       lastSyncAt: new Date().toISOString(),
       lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
-      recordCount: records.length,
+      recordCount: uploaded.recordCount ?? records.length,
       message: '本机和云端已同步'
     });
 
@@ -207,11 +200,12 @@ async function pushLocalCloudSnapshot({ render = true, showSuccess = true } = {}
 
     const backupId = getCloudBackupId();
     const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
+    await applyRemoteBackup(uploaded);
     setCloudSyncMeta({
       status: 'synced',
       lastSyncAt: new Date().toISOString(),
       lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
-      recordCount: records.length,
+      recordCount: uploaded.recordCount ?? records.length,
       message: '本机和云端已同步'
     });
 
@@ -252,6 +246,22 @@ async function runCloudTask(task, { showSuccess = true, waitForCurrent = false }
   })();
 
   return cloudSyncPromise;
+}
+
+async function applyRemoteBackup(remote = {}) {
+  const deleteSummary = await applyDeletedRecordKeys(remote.deletedRecordKeys || []);
+  const importSummary = await importRecords(remote.records || []);
+  if (remote.settings) {
+    await importSettings(remote.settings);
+    await refreshSettings();
+  }
+  if (importSummary.imported > 0 || deleteSummary.deleted > 0) {
+    await refreshData();
+  }
+  return {
+    imported: importSummary.imported || 0,
+    deleted: deleteSummary.deleted || 0
+  };
 }
 
 function startAutoRefresh() {
