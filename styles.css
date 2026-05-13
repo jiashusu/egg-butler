@@ -69,7 +69,11 @@ body {
 }
 
 .loading-icon {
-  font-size: 48px;
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+  object-fit: cover;
   margin-bottom: 12px;
   animation: bounce 1.5s ease infinite;
 }

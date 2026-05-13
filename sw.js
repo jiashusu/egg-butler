@@ -1,4 +1,4 @@
-const CACHE_NAME = 'egg-butler-v15';
+const CACHE_NAME = 'egg-butler-v16';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -8,8 +8,13 @@ const STATIC_ASSETS = [
   '/prediction.js',
   '/charts.js',
   '/assets/dandan-portrait.jpeg',
+  '/assets/app-icon.png',
+  '/assets/icons/icon-192.png',
+  '/assets/icons/icon-512.png',
+  '/assets/icons/apple-touch-icon.png',
+  '/assets/icons/favicon-32.png',
+  '/assets/icons/favicon-16.png',
   '/utils/cloudBackup.js',
-  '/icon.svg',
   '/manifest.webmanifest',
   '/views/dashboard.js',
   '/views/record.js',
