@@ -110,12 +110,20 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
 .dash-title {
   font-size: 24px;
   font-weight: 700;
   color: var(--text);
+  min-width: 0;
+}
+
+.dash-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
 }
 
 .btn-icon {
@@ -133,8 +141,26 @@ body {
   transition: var(--transition);
 }
 
+.btn-icon:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
 .btn-icon:active {
   transform: scale(0.92);
+}
+
+.btn-icon.syncing {
+  color: var(--primary);
+}
+
+.btn-icon.syncing {
+  animation: syncSpin 0.8s linear infinite;
+}
+
+@keyframes syncSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .dash-greeting {

@@ -37,10 +37,20 @@ export function render(container, predictions, stats, records = [], settings = {
   const header = createElement('div', { className: 'dash-header' }, [
     createElement('div', { className: 'dash-header-top' }, [
       createElement('h1', { className: 'dash-title' }, `${settings.petName || '宠物'}管家`),
-      createElement('button', {
-        className: 'btn-icon',
-        onclick: showSettingsModal
-      }, '⚙️')
+      createElement('div', { className: 'dash-header-actions' }, [
+        createElement('button', {
+          className: 'btn-icon',
+          title: '刷新并同步云端',
+          'aria-label': '刷新并同步云端',
+          onclick: handleHeaderSync
+        }, '↻'),
+        createElement('button', {
+          className: 'btn-icon',
+          title: '数据管理',
+          'aria-label': '数据管理',
+          onclick: showSettingsModal
+        }, '⚙️')
+      ])
     ]),
     createElement('p', { className: 'dash-greeting' }, `${greeting}，${settings.petName || '宠物'} 🐾`)
   ]);
@@ -71,6 +81,32 @@ export function render(container, predictions, stats, records = [], settings = {
     }
   }, '✨ 记录');
   container.appendChild(fab);
+}
+
+async function handleHeaderSync(event) {
+  const button = event?.currentTarget;
+  if (!window.syncCloudNow || button?.disabled) return;
+
+  if (button) {
+    button.disabled = true;
+    button.classList.add('syncing');
+    button.setAttribute('aria-busy', 'true');
+  }
+
+  const result = await window.syncCloudNow({ render: true, showSuccess: false });
+  if (result === null) {
+    showToast('正在同步，请稍等');
+  } else if (result?.ok === false) {
+    showToast(result.error?.message || '云端同步失败');
+  } else {
+    showToast('已同步最新数据');
+  }
+
+  if (button) {
+    button.disabled = false;
+    button.classList.remove('syncing');
+    button.removeAttribute('aria-busy');
+  }
 }
 
 function createDogProfileCard(stats, settings, predictions = {}) {
