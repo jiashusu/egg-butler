@@ -29,6 +29,13 @@ const MIN_INTERVAL_MINUTES = {
   pee: 180
 };
 
+const RELATION_WINDOWS = {
+  feedPair: 15,
+  drinkToPee: 360,
+  peeToPoop: 45,
+  eatToPoop: 720
+};
+
 const POOP_STATUS = {
   normal: { label: '正常', healthScore: 1 },
   small: { label: '少量', healthScore: 0.65 },
@@ -80,11 +87,17 @@ function computeIntervals(records) {
 function filterOutliers(intervals) {
   if (intervals.length < 3) return intervals;
 
-  const mean = intervals.reduce((s, x) => s + x.interval, 0) / intervals.length;
-  const stdDev = Math.sqrt(intervals.reduce((s, x) => s + (x.interval - mean) ** 2, 0) / intervals.length);
-  const threshold = 2 * stdDev;
+  const values = intervals.map(x => x.interval).sort((a, b) => a - b);
+  const q1 = percentile(values, 0.25);
+  const q3 = percentile(values, 0.75);
+  const iqr = q3 - q1;
 
-  return intervals.filter(x => Math.abs(x.interval - mean) <= threshold);
+  if (iqr <= 0) return intervals;
+
+  const min = q1 - iqr * 1.5;
+  const max = q3 + iqr * 1.5;
+  const filtered = intervals.filter(x => x.interval >= min && x.interval <= max);
+  return filtered.length > 0 ? filtered : intervals;
 }
 
 function weightedInterval(intervals, weightRecent = true) {
@@ -141,6 +154,265 @@ function estimateConfidence(intervals, totalRecords) {
   return Math.max(0.1, Math.min(0.95, stability * (0.3 + 0.7 * dataVolume)));
 }
 
+function sortByTime(records = []) {
+  return records
+    .filter(record => record?.timestamp && !Number.isNaN(new Date(record.timestamp).getTime()))
+    .slice()
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+function latestOfType(records, type) {
+  const typed = sortByTime(records).filter(record => record.type === type);
+  return typed[typed.length - 1] || null;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function percentile(sortedValues, ratio) {
+  if (!sortedValues.length) return 0;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const index = (sortedValues.length - 1) * ratio;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sortedValues[lower];
+  return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * (index - lower);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function blendDates(a, b, bWeight) {
+  if (!a) return b;
+  if (!b) return a;
+  const weight = clamp(bWeight, 0, 1);
+  return new Date(a.getTime() * (1 - weight) + b.getTime() * weight);
+}
+
+function computeIntervalProfile(records) {
+  const intervals = computeIntervals(records);
+  const filtered = filterOutliers(intervals);
+  const values = filtered.map(item => item.interval);
+  const med = median(values);
+  const weighted = weightedInterval(filtered, true);
+  const stableInterval = med && weighted
+    ? med * 0.65 + weighted * 0.35
+    : weighted || med || null;
+
+  return {
+    intervals,
+    filtered,
+    median: med,
+    weighted,
+    stableInterval
+  };
+}
+
+function summarizeForwardRelation(records, sourceType, targetType, maxMinutes, label) {
+  const sorted = sortByTime(records);
+  const intervals = [];
+  const usedTargets = new Set();
+
+  sorted.forEach((source, sourceIndex) => {
+    if (source.type !== sourceType) return;
+    const sourceTime = new Date(source.timestamp);
+    const targetIndex = sorted.findIndex((target, index) => {
+      if (index <= sourceIndex || usedTargets.has(index) || target.type !== targetType) return false;
+      const minutes = (new Date(target.timestamp) - sourceTime) / 60000;
+      return minutes >= 0 && minutes <= maxMinutes;
+    });
+
+    if (targetIndex >= 0) {
+      usedTargets.add(targetIndex);
+      intervals.push((new Date(sorted[targetIndex].timestamp) - sourceTime) / 60000);
+    }
+  });
+
+  return summarizeRelationIntervals(intervals, label, sourceType, targetType, maxMinutes);
+}
+
+function summarizeNearPair(records, aType, bType, maxAbsMinutes, label) {
+  const sorted = sortByTime(records);
+  const intervals = [];
+  const usedTargets = new Set();
+
+  sorted.forEach((source) => {
+    if (source.type !== aType) return;
+    const sourceTime = new Date(source.timestamp);
+    let best = null;
+
+    sorted.forEach((target, targetIndex) => {
+      if (target.type !== bType || usedTargets.has(targetIndex)) return;
+      const minutes = (new Date(target.timestamp) - sourceTime) / 60000;
+      if (Math.abs(minutes) > maxAbsMinutes) return;
+      if (!best || Math.abs(minutes) < Math.abs(best.minutes)) {
+        best = { targetIndex, minutes };
+      }
+    });
+
+    if (best) {
+      usedTargets.add(best.targetIndex);
+      intervals.push(best.minutes);
+    }
+  });
+
+  return summarizeRelationIntervals(intervals, label, aType, bType, maxAbsMinutes);
+}
+
+function summarizeRelationIntervals(intervals, label, sourceType, targetType, maxMinutes) {
+  const sorted = intervals.slice().sort((a, b) => a - b);
+  const absSorted = intervals.map(Math.abs).sort((a, b) => a - b);
+  const avg = intervals.length > 0
+    ? intervals.reduce((sum, minutes) => sum + minutes, 0) / intervals.length
+    : 0;
+
+  return {
+    label,
+    sourceType,
+    targetType,
+    maxMinutes,
+    samples: intervals.length,
+    avg: Math.round(avg),
+    median: sorted.length ? median(sorted) : null,
+    p75: absSorted.length ? percentile(absSorted, 0.75) : null,
+    intervals: sorted
+  };
+}
+
+export function analyzeRhythmRelations(records = []) {
+  return {
+    feedPair: summarizeNearPair(records, 'eat', 'drink', RELATION_WINDOWS.feedPair, '吃饭和喝水同轮'),
+    drinkToPee: summarizeForwardRelation(records, 'drink', 'pee', RELATION_WINDOWS.drinkToPee, '喝水后尿尿'),
+    peeToPoop: summarizeForwardRelation(records, 'pee', 'poop', RELATION_WINDOWS.peeToPoop, '尿尿后排便'),
+    eatToPoop: summarizeForwardRelation(records, 'eat', 'poop', RELATION_WINDOWS.eatToPoop, '吃饭后排便')
+  };
+}
+
+function hasNearRecord(records, type, date, maxAbsMinutes) {
+  const targetTime = date.getTime();
+  return records.some(record => {
+    if (record.type !== type || !record.timestamp) return false;
+    const minutes = Math.abs((new Date(record.timestamp).getTime() - targetTime) / 60000);
+    return minutes <= maxAbsMinutes;
+  });
+}
+
+function hasTargetAfter(sourceRecord, records, targetType, maxMinutes) {
+  if (!sourceRecord) return false;
+  const sourceTime = new Date(sourceRecord.timestamp);
+  return records.some(record => {
+    if (record.type !== targetType || !record.timestamp) return false;
+    const minutes = (new Date(record.timestamp) - sourceTime) / 60000;
+    return minutes >= 0 && minutes <= maxMinutes;
+  });
+}
+
+function relationConfidenceBoost(relation) {
+  if (!relation?.samples) return 0;
+  return Math.min(0.18, relation.samples * 0.025);
+}
+
+function applyRelationAdjustments({ type, records, typedRecords, nextTime, confidence, message, adjustedInterval, now, relations }) {
+  let resultTime = nextTime;
+  let resultConfidence = confidence;
+  let resultMessage = message;
+
+  if (type === 'drink' || type === 'eat') {
+    const otherType = type === 'drink' ? 'eat' : 'drink';
+    const otherLatest = latestOfType(records, otherType);
+    const currentLatest = typedRecords[typedRecords.length - 1] || null;
+    const pair = relations.feedPair;
+
+    if (otherLatest && pair.samples >= 2) {
+      const otherTime = new Date(otherLatest.timestamp);
+      const alreadyPaired = hasNearRecord(records, type, otherTime, RELATION_WINDOWS.feedPair);
+      const currentAfterOther = currentLatest && new Date(currentLatest.timestamp) >= otherTime;
+      const minutesSinceOther = (now - otherTime) / 60000;
+
+      if (!alreadyPaired && !currentAfterOther && minutesSinceOther >= 0 && minutesSinceOther <= 120) {
+        const learnedOffset = type === 'drink' ? pair.median : -pair.median;
+        const pairTime = new Date(otherTime.getTime() + learnedOffset * 60000);
+        resultTime = pairTime <= now ? new Date(now) : pairTime;
+        resultConfidence = Math.min(0.9, resultConfidence + relationConfidenceBoost(pair));
+        resultMessage = resultTime <= now ? `该${TYPE_LABELS[type].name}啦` : '这一轮通常会一起记录';
+      }
+    }
+  }
+
+  if (type === 'poop') {
+    const peeToPoop = relations.peeToPoop;
+    const latestPee = latestOfType(records, 'pee');
+    const latestPoop = latestOfType(records, 'poop');
+
+    if (latestPee && peeToPoop.samples >= 3) {
+      const peeTime = new Date(latestPee.timestamp);
+      const poopAfterPee = latestPoop && new Date(latestPoop.timestamp) >= peeTime;
+      const minutesSincePee = (now - peeTime) / 60000;
+      const pairDelay = clamp(peeToPoop.median ?? peeToPoop.avg ?? 5, 1, RELATION_WINDOWS.peeToPoop);
+      const pairWatchWindow = Math.max(30, (peeToPoop.p75 || pairDelay) * 3);
+
+      if (!poopAfterPee && minutesSincePee >= 0 && minutesSincePee <= pairWatchWindow) {
+        const pairTime = new Date(peeTime.getTime() + pairDelay * 60000);
+        resultTime = pairTime <= now ? new Date(now) : pairTime;
+        resultConfidence = Math.min(0.92, resultConfidence + relationConfidenceBoost(peeToPoop) + 0.08);
+        resultMessage = resultTime <= now ? '该排便了！' : '尿尿后常会排便';
+      } else if (poopAfterPee) {
+        const poopTime = new Date(latestPoop.timestamp);
+        const minutesSincePoop = (now - poopTime) / 60000;
+        const minNextPoop = Math.max(MIN_INTERVAL_MINUTES.poop, adjustedInterval * 0.55);
+        if (minutesSincePoop < 120 && resultTime && resultTime < new Date(poopTime.getTime() + minNextPoop * 60000)) {
+          resultTime = new Date(poopTime.getTime() + minNextPoop * 60000);
+          resultMessage = '刚排便过，继续观察';
+        }
+      }
+    }
+
+    const eatToPoop = relations.eatToPoop;
+    const latestEat = latestOfType(records, 'eat');
+    if (latestEat && new Date(latestEat.timestamp) <= now && eatToPoop.samples >= 3 && !hasTargetAfter(latestEat, records, 'poop', RELATION_WINDOWS.eatToPoop)) {
+      const eatTime = new Date(latestEat.timestamp);
+      const relationTime = new Date(eatTime.getTime() + (eatToPoop.median || eatToPoop.avg) * 60000);
+      if (resultTime && relationTime < resultTime) {
+        resultTime = blendDates(resultTime, relationTime, 0.25);
+        resultConfidence = Math.min(0.9, resultConfidence + relationConfidenceBoost(eatToPoop) * 0.5);
+      }
+    }
+  }
+
+  if (type === 'pee') {
+    const drinkToPee = relations.drinkToPee;
+    const latestDrink = latestOfType(records, 'drink');
+    const latestPee = latestOfType(records, 'pee');
+
+    if (latestDrink && new Date(latestDrink.timestamp) <= now && drinkToPee.samples >= 3) {
+      const drinkTime = new Date(latestDrink.timestamp);
+      const peeAfterDrink = latestPee && new Date(latestPee.timestamp) >= drinkTime;
+
+      if (!peeAfterDrink) {
+        const relationTime = new Date(drinkTime.getTime() + (drinkToPee.median || drinkToPee.avg) * 60000);
+        if (resultTime && relationTime < resultTime) {
+          resultTime = relationTime <= now ? new Date(now) : blendDates(resultTime, relationTime, 0.35);
+          resultConfidence = Math.min(0.9, resultConfidence + relationConfidenceBoost(drinkToPee) * 0.75);
+          if (relationTime <= now) resultMessage = '该尿尿了！';
+        }
+      }
+    }
+  }
+
+  return {
+    nextTime: resultTime,
+    confidence: parseFloat(resultConfidence.toFixed(2)),
+    message: resultMessage
+  };
+}
+
 export function predictNext(type, records) {
   const typedRecords = records
     .filter(r => r.type === type)
@@ -185,9 +457,9 @@ export function predictNext(type, records) {
     };
   }
 
-  const allIntervals = computeIntervals(typedRecords);
-  const filteredIntervals = filterOutliers(allIntervals);
-  const avgInterval = weightedInterval(filteredIntervals, true);
+  const intervalProfile = computeIntervalProfile(typedRecords);
+  const filteredIntervals = intervalProfile.filtered;
+  const avgInterval = intervalProfile.stableInterval;
 
   if (!avgInterval) {
     return {
@@ -275,6 +547,21 @@ export function predictNext(type, records) {
     }
   }
 
+  const relationAdjusted = applyRelationAdjustments({
+    type,
+    records,
+    typedRecords,
+    nextTime: bestSlot,
+    confidence,
+    message,
+    adjustedInterval,
+    now,
+    relations: analyzeRhythmRelations(records)
+  });
+  bestSlot = relationAdjusted.nextTime;
+  confidence = relationAdjusted.confidence;
+  message = relationAdjusted.message;
+
   return {
     type,
     nextTime: bestSlot,
@@ -324,9 +611,8 @@ export function getStats(type, records) {
 
   const poopStats = type === 'poop' ? getPoopStats(typedRecords, todayRecords) : {};
 
-  const intervals = computeIntervals(typedRecords);
-  const filtered = filterOutliers(intervals);
-  const avgInterval = filtered.length > 0 ? Math.round(weightedInterval(filtered, false)) : null;
+  const intervalProfile = computeIntervalProfile(typedRecords);
+  const avgInterval = intervalProfile.stableInterval ? Math.round(intervalProfile.stableInterval) : null;
 
   return {
     type,
