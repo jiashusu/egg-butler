@@ -7,7 +7,6 @@ import {
   getCurrentActivityDayKey,
   getRecentActivityDayBuckets
 } from '../utils/activityDay.js';
-import { analyzeRhythmRelations } from '../prediction.js';
 
 const TYPE_INFO = {
   drink: { icon: '💧', label: '喝水', unit: 'ml', color: '#4A90D9' },
@@ -149,12 +148,10 @@ function createRhythmPanel(records) {
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
   const summary = summarizeDay(dayRecords);
-  const rhythmRelations = analyzeRhythmRelations(records);
   const relations = [
-    rhythmRelations.feedPair,
-    rhythmRelations.drinkToPee,
-    rhythmRelations.peeToPoop,
-    rhythmRelations.eatToPoop
+    getRelation(records, 'drink', 'pee', 240, '喝水后尿尿'),
+    getRelation(records, 'pee', 'poop', 90, '尿尿后排便'),
+    getRelation(records, 'eat', 'poop', 480, '吃饭后排便')
   ];
 
   const cards = createElement('div', { className: 'rhythm-card-grid' });
@@ -168,7 +165,7 @@ function createRhythmPanel(records) {
   relations.forEach(item => {
     relationList.appendChild(createElement('div', { className: 'rhythm-relation-row' }, [
       createElement('span', { className: 'rhythm-relation-name' }, item.label),
-      createElement('strong', {}, item.samples > 0 ? intervalText(Math.abs(item.median ?? item.avg)) : '待观察'),
+      createElement('strong', {}, item.samples > 0 ? intervalText(item.avg) : '待观察'),
       createElement('span', { className: 'rhythm-relation-hint' }, item.samples > 0 ? `${item.samples} 组数据` : '需要更多连续记录')
     ]));
   });
@@ -365,6 +362,34 @@ function summarizeDay(dayRecords) {
     busyLabel: PERIOD_LABELS[busy[0]],
     busyCount: busy[1],
     poopAlert: abnormal > 0 ? `排便异常 ${abnormal} 次` : `${poopRecords.length} 次排便`
+  };
+}
+
+function getRelation(records, sourceType, targetType, maxMinutes, label) {
+  const sorted = records
+    .slice()
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const intervals = [];
+
+  sorted.forEach((source, index) => {
+    if (source.type !== sourceType) return;
+    const sourceTime = new Date(source.timestamp);
+    const target = sorted.slice(index + 1).find(record => {
+      if (record.type !== targetType) return false;
+      const minutes = (new Date(record.timestamp) - sourceTime) / 60000;
+      return minutes > 0 && minutes <= maxMinutes;
+    });
+    if (target) {
+      intervals.push((new Date(target.timestamp) - sourceTime) / 60000);
+    }
+  });
+
+  return {
+    label,
+    avg: intervals.length > 0
+      ? Math.round(intervals.reduce((sum, minutes) => sum + minutes, 0) / intervals.length)
+      : 0,
+    samples: intervals.length
   };
 }
 
