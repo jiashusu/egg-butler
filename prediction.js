@@ -29,6 +29,9 @@ const MIN_INTERVAL_MINUTES = {
   pee: 180
 };
 
+const MEAL_TOILET_INTERVAL_MINUTES = 270;
+const MEAL_TOILET_TARGET_COUNT = 4;
+
 const POOP_STATUS = {
   normal: { label: '正常', healthScore: 1 },
   small: { label: '少量', healthScore: 0.65 },
@@ -141,13 +144,62 @@ function estimateConfidence(intervals, totalRecords) {
   return Math.max(0.1, Math.min(0.95, stability * (0.3 + 0.7 * dataVolume)));
 }
 
+function getMealToiletPrediction(type, records, typedRecords, today, todayCount, now) {
+  if (type !== 'poop' && type !== 'pee') return null;
+
+  const dayRecords = getActivityDayRecords(records, today, records)
+    .slice()
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const firstMeal = dayRecords.find(record => record.type === 'eat');
+  if (!firstMeal) return null;
+
+  const mealTime = new Date(firstMeal.timestamp);
+  if (Number.isNaN(mealTime.getTime()) || mealTime > now) return null;
+
+  const totalRecords = typedRecords.length;
+  if (todayCount >= MEAL_TOILET_TARGET_COUNT) {
+    return {
+      type,
+      nextTime: null,
+      confidence: 0.86,
+      message: `本轮已完成${MEAL_TOILET_TARGET_COUNT}次`,
+      todayCount,
+      avgInterval: MEAL_TOILET_INTERVAL_MINUTES,
+      intervalMinutes: MEAL_TOILET_INTERVAL_MINUTES,
+      totalRecords
+    };
+  }
+
+  const nextIndex = todayCount + 1;
+  const scheduledTime = new Date(mealTime.getTime() + nextIndex * MEAL_TOILET_INTERVAL_MINUTES * 60000);
+  const isDue = now >= scheduledTime;
+  const label = TYPE_LABELS[type].name;
+
+  return {
+    type,
+    nextTime: isDue ? now : scheduledTime,
+    confidence: 0.86,
+    message: isDue ? `该${label}了！` : `饭后每4小时30分钟，第${nextIndex}/${MEAL_TOILET_TARGET_COUNT}次`,
+    todayCount,
+    avgInterval: MEAL_TOILET_INTERVAL_MINUTES,
+    intervalMinutes: MEAL_TOILET_INTERVAL_MINUTES,
+    totalRecords
+  };
+}
+
 export function predictNext(type, records) {
   const typedRecords = records
     .filter(r => r.type === type)
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   const totalRecords = typedRecords.length;
+  const today = getCurrentActivityDayKey(records);
+  const todayCount = typedRecords.filter(record => getActivityDayKeyForRecord(record, records) === today).length;
+  const now = new Date();
+  const mealToiletPrediction = getMealToiletPrediction(type, records, typedRecords, today, todayCount, now);
 
   if (totalRecords === 0) {
+    if (mealToiletPrediction) return mealToiletPrediction;
+
     return {
       type,
       nextTime: null,
@@ -158,12 +210,10 @@ export function predictNext(type, records) {
     };
   }
 
-  const today = getCurrentActivityDayKey(records);
-  const todayCount = typedRecords.filter(record => getActivityDayKeyForRecord(record, records) === today).length;
+  if (mealToiletPrediction) return mealToiletPrediction;
 
   const lastRecord = typedRecords[typedRecords.length - 1];
   const lastTime = new Date(lastRecord.timestamp);
-  const now = new Date();
 
   if (totalRecords === 1) {
     const defaultMin = TYPE_LABELS[type].default;
