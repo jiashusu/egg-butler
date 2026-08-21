@@ -235,9 +235,17 @@ function createPredictionCard(type, pred, stat, info) {
   const predSection = createElement('div', { className: 'card-prediction' });
 
   if (!pred || !pred.nextTime) {
+    const lastDate = stat?.lastTimestamp ? new Date(stat.lastTimestamp) : null;
+    const sinceLastText = lastDate
+      ? `距上次：${intervalText((Date.now() - lastDate.getTime()) / 60000)}`
+      : '距上次：暂无记录';
+    const lastTimeText = lastDate ? `上次时间：${formatDateTime(lastDate)}` : '上次时间：暂无';
+
     predSection.innerHTML = `
       <div class="pred-time">--:--</div>
-      <div class="pred-message">暂无数据</div>
+      <div class="pred-last">${sinceLastText}</div>
+      <div class="pred-last">${lastTimeText}</div>
+      <div class="pred-message">${pred?.message || '暂无数据'}</div>
     `;
   } else {
     const nextDate = new Date(pred.nextTime);
@@ -248,9 +256,11 @@ function createPredictionCard(type, pred, stat, info) {
     const timePrefix = predDate === today ? '预计今天' : `预计${predDate}`;
 
     const confidencePercent = Math.round((pred.confidence || 0) * 100);
+    const lastDate = stat?.lastTimestamp ? new Date(stat.lastTimestamp) : null;
     const sinceLastText = stat?.lastTimestamp
-      ? `距上次：${intervalText((Date.now() - new Date(stat.lastTimestamp).getTime()) / 60000)}`
+      ? `距上次：${intervalText((Date.now() - lastDate.getTime()) / 60000)}`
       : '距上次：暂无记录';
+    const lastTimeText = lastDate ? `上次时间：${formatDateTime(lastDate)}` : '上次时间：暂无';
     const dueMessage = Date.now() >= nextDate.getTime() ? getDueMessage(type, info) : pred.message || '';
 
     predSection.innerHTML = `
@@ -259,6 +269,7 @@ function createPredictionCard(type, pred, stat, info) {
         <span class="pred-time">${timeStr}</span>
       </div>
       <div class="pred-last">${sinceLastText}</div>
+      <div class="pred-last">${lastTimeText}</div>
       <div class="confidence-bar-wrap">
         <div class="confidence-bar" style="width:${confidencePercent}%"></div>
       </div>
