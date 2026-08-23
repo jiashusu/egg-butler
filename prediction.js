@@ -171,7 +171,14 @@ function getMealToiletPrediction(type, records, typedRecords, today, todayCount,
   }
 
   const nextIndex = todayCount + 1;
-  const scheduledTime = new Date(mealTime.getTime() + nextIndex * MEAL_TOILET_INTERVAL_MINUTES * 60000);
+  const typeDayRecords = dayRecords.filter(record => record.type === type);
+  const lastDayRecord = typeDayRecords[typeDayRecords.length - 1];
+  const lastDayTime = lastDayRecord ? new Date(lastDayRecord.timestamp) : null;
+  const plannedTime = new Date(mealTime.getTime() + nextIndex * MEAL_TOILET_INTERVAL_MINUTES * 60000);
+  const anchoredTime = lastDayTime && !Number.isNaN(lastDayTime.getTime())
+    ? new Date(lastDayTime.getTime() + MEAL_TOILET_INTERVAL_MINUTES * 60000)
+    : null;
+  const scheduledTime = anchoredTime && anchoredTime > plannedTime ? anchoredTime : plannedTime;
   const isDue = now >= scheduledTime;
   const label = TYPE_LABELS[type].name;
 
