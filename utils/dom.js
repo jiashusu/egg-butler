@@ -56,6 +56,7 @@ export function hideModal() {
   if (!overlay || !content) return;
   overlay.classList.remove('active');
   content.classList.remove('active');
+  document.dispatchEvent(new Event('eggButlerModalClosed'));
 }
 
 export function showToast(message, duration = 2500) {

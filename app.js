@@ -13,7 +13,7 @@ import { showLoading, showToast, showModal, hideModal, $id, $q } from './utils/d
 import { toLocalISO } from './utils/time.js';
 import { downloadCloudBackup, getCloudBackupId, setCloudSyncMeta, uploadCloudBackup } from './utils/cloudBackup.js';
 
-import './views/dashboard.js';
+import { refreshSyncStatus } from './views/dashboard.js';
 import './views/record.js';
 import './views/history.js';
 import './views/analytics.js';
@@ -25,8 +25,10 @@ let settings = {};
 let currentRoute = 'dashboard';
 let initPromise = null;
 let cloudSyncTimer = null;
-let cloudSyncInFlight = false;
 let cloudSyncPromise = null;
+let cloudRenderPending = false;
+const CLOUD_PENDING_KEY = 'eggButlerCloudPendingRevision';
+const CLOUD_POLL_INTERVAL = 15000;
 
 async function init() {
   if (initPromise) return initPromise;
@@ -37,10 +39,6 @@ async function init() {
     await initDB();
     await refreshData();
     await refreshSettings();
-    await syncCloudRecords({ render: false, showSuccess: false });
-    await refreshData();
-    await refreshSettings();
-
     window.navigateTo = navigateTo;
     window.onRecordSaved = onRecordSaved;
     window.onSettingsSaved = onSettingsSaved;
@@ -50,12 +48,11 @@ async function init() {
     await handleRoute(getInitialRoute());
 
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {});
-      });
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
     startAutoRefresh();
+    syncCloudRecords({ render: false, showSuccess: false });
 
     return true;
   })();
@@ -84,6 +81,7 @@ async function handleRoute(route) {
   const page = parts[0];
   const params = new URLSearchParams(parts[1] || '');
   currentRoute = page;
+  if (page !== 'record') cloudRenderPending = false;
 
   const container = $id('app-content');
 
@@ -115,6 +113,7 @@ async function handleRoute(route) {
 
 async function onRecordSaved(options = {}) {
   const { syncNow = false } = options || {};
+  markLocalCloudChange();
   await refreshData();
   await refreshSettings();
   let syncResult = null;
@@ -130,6 +129,7 @@ async function onRecordSaved(options = {}) {
 }
 
 async function onSettingsSaved() {
+  markLocalCloudChange();
   await refreshSettings();
   scheduleCloudUpload();
   const route = location.hash.replace('#', '') || 'dashboard';
@@ -154,12 +154,11 @@ function scheduleCloudUpload() {
   setCloudSyncMeta({ status: 'pending', message: '本机有新数据，等待上传...' });
   cloudSyncTimer = setTimeout(() => {
     pushLocalCloudSnapshot({ render: false, showSuccess: false }).catch(() => {});
-  }, 1200);
+    cloudSyncTimer = null;
+  }, 250);
 }
 
 async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
-  if (cloudSyncInFlight) return null;
-
   return runCloudTask(async () => {
     setCloudSyncMeta({ status: 'syncing', message: '正在同步...' });
     const backupId = getCloudBackupId();
@@ -169,15 +168,7 @@ async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
       await applyRemoteBackup(remote);
     }
 
-    const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
-    await applyRemoteBackup(uploaded);
-    setCloudSyncMeta({
-      status: 'synced',
-      lastSyncAt: new Date().toISOString(),
-      lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
-      recordCount: uploaded.recordCount ?? records.length,
-      message: '本机和云端已同步'
-    });
+    await uploadCurrentCloudSnapshot(backupId);
 
     if (render) {
       await refreshData();
@@ -189,25 +180,14 @@ async function syncCloudRecords({ render = true, showSuccess = true } = {}) {
     if (showSuccess) showToast('云端同步完成');
 
     return { ok: true, backupId };
-  }, { showSuccess });
+  }, { showSuccess, waitForCurrent: true });
 }
 
 async function pushLocalCloudSnapshot({ render = true, showSuccess = true } = {}) {
   return runCloudTask(async () => {
     setCloudSyncMeta({ status: 'syncing', message: '正在上传本机数据...' });
-    await refreshData();
-    await refreshSettings();
-
     const backupId = getCloudBackupId();
-    const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
-    await applyRemoteBackup(uploaded);
-    setCloudSyncMeta({
-      status: 'synced',
-      lastSyncAt: new Date().toISOString(),
-      lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
-      recordCount: uploaded.recordCount ?? records.length,
-      message: '本机和云端已同步'
-    });
+    await uploadCurrentCloudSnapshot(backupId);
 
     if (render) {
       const route = location.hash.replace('#', '') || 'dashboard';
@@ -222,25 +202,23 @@ async function pushLocalCloudSnapshot({ render = true, showSuccess = true } = {}
 }
 
 async function runCloudTask(task, { showSuccess = true, waitForCurrent = false } = {}) {
-  if (cloudSyncPromise) {
+  while (cloudSyncPromise) {
     if (!waitForCurrent) return null;
     await cloudSyncPromise.catch(() => {});
   }
 
-  cloudSyncInFlight = true;
   cloudSyncPromise = (async () => {
     try {
       return await task();
     } catch (error) {
       setCloudSyncMeta({
         status: 'error',
-        lastSyncAt: new Date().toISOString(),
         message: error?.message || '同步失败'
       });
+      refreshSyncStatus();
       if (showSuccess) showToast(error?.message || '云端同步失败');
       return { ok: false, error };
     } finally {
-      cloudSyncInFlight = false;
       cloudSyncPromise = null;
     }
   })();
@@ -248,9 +226,64 @@ async function runCloudTask(task, { showSuccess = true, waitForCurrent = false }
   return cloudSyncPromise;
 }
 
+function markLocalCloudChange() {
+  localStorage.setItem(CLOUD_PENDING_KEY, crypto.randomUUID());
+}
+
+async function uploadCurrentCloudSnapshot(backupId) {
+  const revision = localStorage.getItem(CLOUD_PENDING_KEY);
+  await refreshData();
+  await refreshSettings();
+  const uploaded = await uploadCloudBackup(records, backupId, settings, getDeletedRecordKeys());
+  await applyRemoteBackup(uploaded);
+  if (localStorage.getItem(CLOUD_PENDING_KEY) === revision) {
+    localStorage.removeItem(CLOUD_PENDING_KEY);
+  }
+  const pending = Boolean(localStorage.getItem(CLOUD_PENDING_KEY));
+  setCloudSyncMeta({
+    status: pending ? 'pending' : 'synced',
+    lastSyncAt: new Date().toISOString(),
+    lastUploadedAt: uploaded.uploadedAt || new Date().toISOString(),
+    recordCount: uploaded.recordCount ?? records.length,
+    message: pending ? '本机有新数据，等待上传...' : '本机和云端已同步'
+  });
+  if (pending) scheduleCloudUpload();
+}
+
+async function pullCloudUpdates() {
+  if (document.visibilityState === 'hidden' || !navigator.onLine || cloudSyncPromise || cloudSyncTimer) return;
+  if (localStorage.getItem(CLOUD_PENDING_KEY)) {
+    return pushLocalCloudSnapshot({ render: false, showSuccess: false });
+  }
+
+  return runCloudTask(async () => {
+    const remote = await downloadCloudBackup();
+    if (!remote.exists) return;
+    const changes = await applyRemoteBackup(remote);
+    // A local edit may have happened while this download was in progress.
+    if (!localStorage.getItem(CLOUD_PENDING_KEY)) {
+      setCloudSyncMeta({
+        status: 'synced',
+        lastSyncAt: new Date().toISOString(),
+        lastUploadedAt: remote.uploadedAt,
+        recordCount: remote.recordCount,
+        message: '本机和云端已同步'
+      });
+    }
+    const route = location.hash.replace('#', '') || 'dashboard';
+    cloudRenderPending ||= Boolean(changes.imported || changes.deleted || changes.settingsChanged);
+    if (cloudRenderPending && currentRoute !== 'record' && !$id('modal-overlay')?.classList.contains('active')) {
+      await handleRoute(route);
+    }
+    refreshSyncStatus();
+    return { ok: true };
+  }, { showSuccess: false });
+}
+
 async function applyRemoteBackup(remote = {}) {
   const deleteSummary = await applyDeletedRecordKeys(remote.deletedRecordKeys || []);
   const importSummary = await importRecords(remote.records || []);
+  const previousSettings = JSON.stringify(settings);
   if (remote.settings) {
     await importSettings(remote.settings);
     await refreshSettings();
@@ -260,11 +293,24 @@ async function applyRemoteBackup(remote = {}) {
   }
   return {
     imported: importSummary.imported || 0,
-    deleted: deleteSummary.deleted || 0
+    deleted: deleteSummary.deleted || 0,
+    settingsChanged: previousSettings !== JSON.stringify(settings)
   };
 }
 
 function startAutoRefresh() {
+  setInterval(pullCloudUpdates, CLOUD_POLL_INTERVAL);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') pullCloudUpdates();
+  });
+  window.addEventListener('focus', pullCloudUpdates);
+  window.addEventListener('pageshow', pullCloudUpdates);
+  window.addEventListener('online', pullCloudUpdates);
+  document.addEventListener('eggButlerModalClosed', () => {
+    if (cloudRenderPending && currentRoute !== 'record') {
+      handleRoute(location.hash.replace('#', '') || 'dashboard');
+    }
+  });
   setInterval(async () => {
     const route = location.hash.replace('#', '') || 'dashboard';
     if (route === 'dashboard') {

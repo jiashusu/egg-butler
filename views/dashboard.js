@@ -1,6 +1,6 @@
 import { formatTime, formatDateCN, intervalText, formatDate, formatRelative, formatDateTime, toLocalISO } from '../utils/time.js';
 import { createElement, $id, showToast, showModal, hideModal } from '../utils/dom.js';
-import { getAllRecords, clearAllData, getRecordCount, getSettings, saveSettings, updateRecord, deleteRecord, addRecords } from '../db.js';
+import { DEFAULT_PET_PHOTO, getAllRecords, clearAllData, getRecordCount, getSettings, saveSettings, updateRecord, deleteRecord, addRecords } from '../db.js';
 import { getCloudBackupId, getCloudSyncMeta, setCloudBackupId } from '../utils/cloudBackup.js';
 
 const TYPE_INFO = {
@@ -114,7 +114,7 @@ function createDogProfileCard(stats, settings, predictions = {}) {
   const species = settings.species || '宠物';
   const breed = settings.breed || '';
   const age = settings.age ? ` · ${settings.age}岁` : '';
-  const photoUrl = settings.photoUrl || '/assets/dandan-portrait.jpeg';
+  const photoUrl = settings.photoUrl || DEFAULT_PET_PHOTO;
   const dueActivities = getDueActivities(predictions);
 
   return createElement('section', { className: 'dog-profile-card' }, [
@@ -376,6 +376,14 @@ function getSyncStatusText(meta) {
   if (meta.status === 'syncing') return '云端同步：正在同步...';
   if (meta.status === 'error') return `云端同步：${meta.message || '同步失败'}`;
   return '云端同步：等待第一次同步';
+}
+
+export function refreshSyncStatus() {
+  const line = document.querySelector('.sync-status-line');
+  if (!line) return;
+  const meta = getCloudSyncMeta();
+  line.className = `sync-status-line sync-status-${meta.status}`;
+  line.textContent = getSyncStatusText(meta);
 }
 
 function getLastUpdateText(records) {

@@ -11,11 +11,11 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      return getBackup(req, res);
+      return await getBackup(req, res);
     }
 
     if (req.method === 'POST') {
-      return saveBackup(req, res);
+      return await saveBackup(req, res);
     }
 
     res.setHeader('Allow', 'GET, POST');
@@ -114,9 +114,10 @@ async function listBackupBlobs(backupId) {
 }
 
 async function fetchBackupBody(blob) {
-  const cacheBust = new Date(blob.uploadedAt || Date.now()).getTime();
+  // A fixed version query can keep serving a cached overwritten latest.json.
+  const cacheBust = `${Date.now()}-${crypto.randomUUID()}`;
   const response = await fetch(`${blob.url}?v=${cacheBust}`, { cache: 'no-store' });
-  if (!response.ok) return null;
+  if (!response.ok) throw new Error(`Backup storage read failed (${response.status})`);
   const body = await response.json();
   return {
     records: Array.isArray(body.records) ? body.records : [],

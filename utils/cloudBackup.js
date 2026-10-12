@@ -27,6 +27,8 @@ export function createCloudBackupId() {
 export async function uploadCloudBackup(records, backupId = getCloudBackupId(), settings = null, deletedRecordKeys = []) {
   const response = await fetch('/api/backup', {
     method: 'POST',
+    cache: 'no-store',
+    signal: AbortSignal.timeout(20000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ backupId, records, settings, deletedRecordKeys, recordCount: records.length })
   });
@@ -38,7 +40,10 @@ export async function uploadCloudBackup(records, backupId = getCloudBackupId(), 
 }
 
 export async function downloadCloudBackup(backupId = getCloudBackupId()) {
-  const response = await fetch(`/api/backup?backupId=${encodeURIComponent(backupId)}`);
+  const response = await fetch(`/api/backup?backupId=${encodeURIComponent(backupId)}`, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(20000)
+  });
   const result = await response.json().catch(() => ({}));
 
   if (response.status === 404) {

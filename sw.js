@@ -1,4 +1,4 @@
-const CACHE_NAME = 'egg-butler-v19';
+const CACHE_NAME = 'egg-butler-v20';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -7,13 +7,13 @@ const STATIC_ASSETS = [
   '/db.js',
   '/prediction.js',
   '/charts.js',
-  '/assets/dandan-portrait.jpeg',
+  '/assets/dandan-cover-20261012.jpg',
   '/assets/app-icon.png',
-  '/assets/icons/icon-192.png',
-  '/assets/icons/icon-512.png',
-  '/assets/icons/apple-touch-icon.png',
-  '/assets/icons/favicon-32.png',
-  '/assets/icons/favicon-16.png',
+  '/assets/icons/icon-192-20261012.png',
+  '/assets/icons/icon-512-20261012.png',
+  '/assets/icons/apple-touch-icon-20261012.png',
+  '/assets/icons/favicon-32-20261012.png',
+  '/assets/icons/favicon-16-20261012.png',
   '/utils/cloudBackup.js',
   '/manifest.webmanifest',
   '/views/dashboard.js',
@@ -47,6 +47,8 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  // Cloud data must never fall back to an old offline snapshot as a success.
+  if (new URL(event.request.url).pathname.startsWith('/api/')) return;
 
   if (event.request.url.includes('cdn.jsdelivr.net')) {
     event.respondWith(
@@ -62,7 +64,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     fetch(event.request).then((fetchResponse) => {
-      if (event.request.url.startsWith(self.location.origin)) {
+      if (fetchResponse.ok && event.request.url.startsWith(self.location.origin)) {
         caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, fetchResponse.clone());
         });

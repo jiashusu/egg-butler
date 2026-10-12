@@ -4,6 +4,8 @@ const MAX_DELETED_RECORD_KEYS = 3000;
 
 let db;
 
+export const DEFAULT_PET_PHOTO = '/assets/dandan-cover-20261012.jpg';
+
 const DEFAULT_SETTINGS = {
   key: 'preferences',
   petName: '蛋蛋',
@@ -11,7 +13,7 @@ const DEFAULT_SETTINGS = {
   species: '狗狗',
   breed: '边牧',
   age: 2,
-  photoUrl: '/assets/dandan-portrait.jpeg',
+  photoUrl: DEFAULT_PET_PHOTO,
   drinkGoal: 607,
   mealDefault: 465,
   drinkDefaultAmount: 607,
@@ -212,7 +214,14 @@ export async function saveSettings(settings) {
 
 export async function importSettings(settings) {
   if (!settings || typeof settings !== 'object') return getSettings();
-  return saveSettings({ ...(await getSettings()), ...settings });
+  const current = await getSettings();
+  const remoteTime = Date.parse(settings.updatedAt || settings.createdAt) || 0;
+  const localTime = Date.parse(current.updatedAt || current.createdAt) || 0;
+  if (current.updatedAt && remoteTime < localTime) return current;
+  const next = normalizeSettings({ ...current, ...settings });
+  // Downloading a profile is not an edit: preserve its original revision time.
+  await db.settings.put({ ...next, key: 'preferences' });
+  return next;
 }
 
 export async function getRecordCount() {
@@ -339,7 +348,9 @@ function normalizeSettings(settings = {}) {
     species: settings.species || DEFAULT_SETTINGS.species,
     breed: settings.breed || DEFAULT_SETTINGS.breed,
     age: settings.age ?? DEFAULT_SETTINGS.age,
-    photoUrl: settings.photoUrl || DEFAULT_SETTINGS.photoUrl,
+    photoUrl: !settings.photoUrl || settings.photoUrl === '/assets/dandan-portrait.jpeg'
+      ? DEFAULT_PET_PHOTO
+      : settings.photoUrl,
     drinkGoal: drinkDefaultAmount,
     mealDefault: mealDefaultAmount,
     drinkDefaultAmount,
