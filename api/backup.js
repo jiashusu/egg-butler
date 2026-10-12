@@ -3,6 +3,8 @@ import { list, put } from '@vercel/blob';
 const BACKUP_PREFIX = 'egg-butler-backups';
 const MAX_PAYLOAD_BYTES = 5 * 1024 * 1024;
 const LATEST_BACKUP_FILE = 'latest.json';
+const canonicalLocations = new Map();
+const LOCATION_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export default async function handler(req, res) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
@@ -72,12 +74,13 @@ async function saveBackup(req, res) {
   }
 
   const pathname = `${BACKUP_PREFIX}/${backupId}/${LATEST_BACKUP_FILE}`;
-  await put(pathname, serialized, {
+  const blob = await put(pathname, serialized, {
     access: 'public',
     allowOverwrite: true,
     contentType: 'application/json',
     cacheControlMaxAge: 60
   });
+  rememberCanonicalLocation(backupId, { ...blob, uploadedAt: next.uploadedAt });
 
   return sendJSON(res, 200, {
     ok: true,
@@ -86,17 +89,33 @@ async function saveBackup(req, res) {
 }
 
 async function loadCanonicalBackup(backupId) {
+  const cached = canonicalLocations.get(backupId);
+  if (cached && cached.expiresAt > Date.now()) {
+    const body = await fetchBackupBody(cached.blob);
+    if (body) return mergeBackups([body]);
+    canonicalLocations.delete(backupId);
+  }
   const blobs = await listBackupBlobs(backupId);
   if (blobs.length === 0) return null;
 
   const latestBlob = blobs.find((blob) => blob.pathname.endsWith(`/${LATEST_BACKUP_FILE}`));
   if (latestBlob) {
-    return mergeBackups([await fetchBackupBody(latestBlob)]);
+    const body = await fetchBackupBody(latestBlob);
+    if (!body) throw new Error('Canonical backup is unavailable');
+    rememberCanonicalLocation(backupId, latestBlob);
+    return mergeBackups([body]);
   }
 
   const backups = await fetchBackupBodies(blobs);
 
   return recoverBackupFromHistory(backups);
+}
+
+function rememberCanonicalLocation(backupId, blob) {
+  // Reuse only the file address, never its contents, to avoid a list operation per poll.
+  canonicalLocations.delete(backupId);
+  if (canonicalLocations.size >= 100) canonicalLocations.delete(canonicalLocations.keys().next().value);
+  canonicalLocations.set(backupId, { blob, expiresAt: Date.now() + LOCATION_CACHE_TTL_MS });
 }
 
 async function listBackupBlobs(backupId) {
@@ -117,6 +136,7 @@ async function fetchBackupBody(blob) {
   // A fixed version query can keep serving a cached overwritten latest.json.
   const cacheBust = `${Date.now()}-${crypto.randomUUID()}`;
   const response = await fetch(`${blob.url}?v=${cacheBust}`, { cache: 'no-store' });
+  if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Backup storage read failed (${response.status})`);
   const body = await response.json();
   return {
