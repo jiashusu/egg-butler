@@ -2,6 +2,7 @@ import { formatTime, formatDateCN, intervalText, formatDate, formatRelative, for
 import { createElement, $id, showToast, showModal, hideModal } from '../utils/dom.js';
 import { DEFAULT_PET_PHOTO, getAllRecords, clearAllData, getRecordCount, getSettings, saveSettings, updateRecord, deleteRecord, addRecords } from '../db.js';
 import { getCloudBackupId, getCloudSyncMeta, setCloudBackupId } from '../utils/cloudBackup.js';
+import { POOP_OPTIONS, poopLabel, normalizePoopStatus } from '../utils/poopStatus.js';
 
 const TYPE_INFO = {
   drink: { icon: '💧', label: '喝水', unit: 'ml', color: '#4A90D9' },
@@ -688,7 +689,7 @@ function renderRecordEditForm(record) {
   const options = Object.entries(TYPE_INFO).map(([key, typeInfo]) =>
     `<option value="${key}"${record.type === key ? ' selected' : ''}>${typeInfo.icon} ${typeInfo.label}</option>`
   ).join('');
-  const poopOptions = ['normal', 'small', 'diarrhea', 'soft', 'dry'].map(value =>
+  const poopOptions = POOP_OPTIONS.map(({ key: value }) =>
     `<option value="${value}"${poopValue === value ? ' selected' : ''}>${poopLabel(value)}</option>`
   ).join('');
 
@@ -737,7 +738,7 @@ function parseBatchLine(line) {
     if (!amount || amount <= 0) return null;
     record.amount = amount;
   } else if (type === 'poop') {
-    record.value = rawValue || 'normal';
+    record.value = normalizePoopStatus(rawValue);
   }
   return record;
 }
@@ -758,14 +759,4 @@ function escapeHTML(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
-}
-
-function poopLabel(value) {
-  return {
-    normal: '正常',
-    small: '少量',
-    diarrhea: '拉稀',
-    soft: '偏软',
-    dry: '偏干'
-  }[value] || '正常';
 }

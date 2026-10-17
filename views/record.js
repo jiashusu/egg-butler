@@ -1,20 +1,13 @@
 import { createElement, $id, showToast, hideModal } from '../utils/dom.js';
 import { toLocalISO, formatDateTime } from '../utils/time.js';
 import { addRecord } from '../db.js';
+import { POOP_OPTIONS } from '../utils/poopStatus.js';
 
 const TYPES = [
   { key: 'drink', icon: '💧', label: '喝水', hasAmount: true, unit: 'ml', defaultAmount: 607 },
   { key: 'eat', icon: '🍚', label: '吃饭', hasAmount: true, unit: 'g', defaultAmount: 465 },
   { key: 'poop', icon: '💩', label: '排便', hasAmount: false, hasValue: true, defaultValue: 'normal' },
   { key: 'pee', icon: '💦', label: '尿尿', hasAmount: false }
-];
-
-const POOP_OPTIONS = [
-  { key: 'normal', label: '正常' },
-  { key: 'small', label: '少量' },
-  { key: 'diarrhea', label: '拉稀' },
-  { key: 'soft', label: '偏软' },
-  { key: 'dry', label: '偏干' }
 ];
 
 let selectedType = null;

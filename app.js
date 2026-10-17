@@ -12,6 +12,7 @@ import { predictAll, getStats } from './prediction.js';
 import { showLoading, showToast, showModal, hideModal, $id, $q } from './utils/dom.js';
 import { toLocalISO } from './utils/time.js';
 import { downloadCloudBackup, getCloudBackupId, setCloudSyncMeta, uploadCloudBackup } from './utils/cloudBackup.js';
+import { POOP_OPTIONS } from './utils/poopStatus.js';
 
 import { refreshSyncStatus } from './views/dashboard.js';
 import './views/record.js';
@@ -329,13 +330,7 @@ function showQuickRecordModal(preSelectedType) {
     drink: settings.drinkDefaultAmount || settings.drinkGoal || 607,
     eat: settings.mealDefaultAmount || settings.mealDefault || 465
   };
-  const poopOptions = [
-    { key: 'normal', label: '正常' },
-    { key: 'small', label: '少量' },
-    { key: 'diarrhea', label: '拉稀' },
-    { key: 'soft', label: '偏软' },
-    { key: 'dry', label: '偏干' }
-  ];
+  const poopOptions = POOP_OPTIONS;
   window._selectedQuickType = '';
   window._selectedPoopValue = 'normal';
 

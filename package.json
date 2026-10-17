@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "check": "node --check app.js && node --check db.js && node --check prediction.js && node --check charts.js && node --check sw.js && node --check views/dashboard.js && node --check views/history.js && node --check views/record.js && node --check views/analytics.js && node --check utils/cloudBackup.js && node --check api/backup.js"
+    "check": "node --check app.js && node --check db.js && node --check prediction.js && node --check charts.js && node --check sw.js && node --check views/dashboard.js && node --check views/history.js && node --check views/record.js && node --check views/analytics.js && node --check utils/cloudBackup.js && node --check utils/rhythm.js && node --check utils/poopStatus.js && node --check api/backup.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.3"

@@ -1,5 +1,7 @@
 /* ===== CSS Custom Properties ===== */
 :root {
+  color-scheme: light;
+  --selected-control-text: #3157B7;
   --primary: #6B8FFA;
   --primary-dark: #4A6FD6;
   --primary-light: #E8EFFF;
@@ -44,6 +46,11 @@ body {
   overflow-x: hidden;
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
+}
+
+button, input, select, textarea {
+  color: var(--text);
+  font-family: inherit;
 }
 
 #app {
@@ -717,6 +724,7 @@ body {
 
 .type-btn {
   background: var(--card-bg);
+  color: var(--text);
   border: 2px solid var(--border);
   border-radius: 14px;
   padding: 16px 12px;
@@ -730,7 +738,7 @@ body {
 .type-btn.active {
   border-color: var(--primary);
   background: var(--primary-light);
-  color: var(--primary-dark);
+  color: var(--selected-control-text);
 }
 
 .type-btn:active {
@@ -759,7 +767,7 @@ body {
 .subtype-btn.active {
   background: var(--primary-light);
   border-color: var(--primary);
-  color: var(--primary-dark);
+  color: var(--selected-control-text);
 }
 
 .subtype-btn:active {
@@ -1604,6 +1612,8 @@ body {
 /* ===== Dark Mode ===== */
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
+    --selected-control-text: #9AB3FF;
     --bg: #121216;
     --card-bg: #1E1E24;
     --text: #E8E8ED;
@@ -1785,6 +1795,7 @@ body {
 
 .quick-type-btn {
   background: var(--bg);
+  color: var(--text);
   border: 2px solid var(--border);
   border-radius: 14px;
   padding: 16px 12px;
@@ -1797,7 +1808,7 @@ body {
 .quick-type-btn.active {
   border-color: var(--primary);
   background: var(--primary-light);
-  color: var(--primary-dark);
+  color: var(--selected-control-text);
 }
 
 .quick-type-btn:active {

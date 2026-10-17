@@ -3,20 +3,13 @@ import { formatDate, formatDateTime, formatTime, intervalText, formatDateCN } fr
 import { getRecordsByType, deleteRecord } from '../db.js';
 import { getStats } from '../prediction.js';
 import { createTimelineChart, createFrequencyChart, createWeekChart } from '../charts.js';
+import { POOP_STATUS, normalizePoopStatus, isAbnormalPoop } from '../utils/poopStatus.js';
 
 const TYPE_INFO = {
   drink: { icon: '💧', label: '喝水', unit: 'ml', color: '#4A90D9' },
   eat: { icon: '🍚', label: '吃饭', unit: 'g', color: '#FF9800' },
   poop: { icon: '💩', label: '排便', unit: '', color: '#4CAF50' },
   pee: { icon: '💦', label: '尿尿', unit: '', color: '#9C27B0' }
-};
-
-const POOP_STATUS = {
-  normal: { label: '正常', className: 'poop-normal' },
-  small: { label: '少量', className: 'poop-small' },
-  diarrhea: { label: '拉稀', className: 'poop-diarrhea' },
-  soft: { label: '偏软', className: 'poop-soft' },
-  dry: { label: '偏干', className: 'poop-dry' }
 };
 
 let currentType = null;
@@ -56,7 +49,7 @@ export async function render(container, type, allRecordsData) {
       </div>
       <div class="stat-item">
         <span class="stat-value">${stat.avgInterval ? intervalText(stat.avgInterval) : '--'}</span>
-        <span class="stat-label">平均间隔</span>
+        <span class="stat-label">近期间隔</span>
       </div>
       <div class="stat-item">
         <span class="stat-value">${stat.todayCount}</span>
@@ -315,7 +308,7 @@ function summarizeByDate(records, type) {
     if (!map[key]) map[key] = { count: 0, total: 0, abnormal: 0 };
     map[key].count++;
     if (record.amount) map[key].total += Number(record.amount) || 0;
-    if (type === 'poop' && record.value && record.value !== 'normal') map[key].abnormal++;
+    if (type === 'poop' && isAbnormalPoop(record.value)) map[key].abnormal++;
     return map;
   }, {});
 }
@@ -348,5 +341,5 @@ function createPoopStatusBar(breakdown) {
 }
 
 function getPoopStatus(value) {
-  return POOP_STATUS[value] || POOP_STATUS.normal;
+  return POOP_STATUS[normalizePoopStatus(value)];
 }

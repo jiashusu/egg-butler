@@ -1,5 +1,7 @@
 import { createElement } from '../utils/dom.js';
 import { formatDateTime, formatTime, intervalText } from '../utils/time.js';
+import { poopLabel, isAbnormalPoop } from '../utils/poopStatus.js';
+import { getRhythmRelations } from '../utils/rhythm.js';
 import {
   formatActivityDayLabel,
   getActivityDayKeyForRecord,
@@ -13,14 +15,6 @@ const TYPE_INFO = {
   eat: { icon: '🍚', label: '吃饭', unit: 'g', color: '#FF9800' },
   poop: { icon: '💩', label: '排便', unit: '次', color: '#4CAF50' },
   pee: { icon: '💦', label: '尿尿', unit: '次', color: '#9C27B0' }
-};
-
-const POOP_STATUS = {
-  normal: '正常',
-  small: '少量',
-  diarrhea: '拉稀',
-  soft: '偏软',
-  dry: '偏干'
 };
 
 let charts = [];
@@ -148,11 +142,7 @@ function createRhythmPanel(records) {
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
   const summary = summarizeDay(dayRecords);
-  const relations = [
-    getRelation(records, 'drink', 'pee', 240, '喝水后尿尿'),
-    getRelation(records, 'pee', 'poop', 90, '尿尿后排便'),
-    getRelation(records, 'eat', 'poop', 480, '吃饭后排便')
-  ];
+  const relations = getRhythmRelations(records);
 
   const cards = createElement('div', { className: 'rhythm-card-grid' });
   cards.appendChild(createRhythmCard('主要时间段', summary.busyLabel, `${summary.busyCount} 条记录集中在这里`));
@@ -335,7 +325,7 @@ function getChartOptions({ stepSize = null } = {}) {
 function getRecordValue(record) {
   const info = TYPE_INFO[record.type] || {};
   if (record.amount != null) return `${record.amount}${info.unit || ''}`;
-  if (record.type === 'poop') return POOP_STATUS[record.value] || '正常';
+  if (record.type === 'poop') return poopLabel(record.value);
   return '1次';
 }
 
@@ -351,7 +341,7 @@ function summarizeDay(dayRecords) {
   });
 
   const busy = Object.entries(periods).sort((a, b) => b[1] - a[1])[0] || ['morning', 0];
-  const abnormal = poopRecords.filter(record => record.value && record.value !== 'normal').length;
+  const abnormal = poopRecords.filter(record => isAbnormalPoop(record.value)).length;
 
   return {
     drinkTotal: Math.round(drinkRecords.reduce((sum, record) => sum + (record.amount || 0), 0)),
@@ -362,34 +352,6 @@ function summarizeDay(dayRecords) {
     busyLabel: PERIOD_LABELS[busy[0]],
     busyCount: busy[1],
     poopAlert: abnormal > 0 ? `排便异常 ${abnormal} 次` : `${poopRecords.length} 次排便`
-  };
-}
-
-function getRelation(records, sourceType, targetType, maxMinutes, label) {
-  const sorted = records
-    .slice()
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-  const intervals = [];
-
-  sorted.forEach((source, index) => {
-    if (source.type !== sourceType) return;
-    const sourceTime = new Date(source.timestamp);
-    const target = sorted.slice(index + 1).find(record => {
-      if (record.type !== targetType) return false;
-      const minutes = (new Date(record.timestamp) - sourceTime) / 60000;
-      return minutes > 0 && minutes <= maxMinutes;
-    });
-    if (target) {
-      intervals.push((new Date(target.timestamp) - sourceTime) / 60000);
-    }
-  });
-
-  return {
-    label,
-    avg: intervals.length > 0
-      ? Math.round(intervals.reduce((sum, minutes) => sum + minutes, 0) / intervals.length)
-      : 0,
-    samples: intervals.length
   };
 }
 
